@@ -1,0 +1,208 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  userId    Int      @id @default(autoincrement())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String
+  password  String
+  role      String
+  status    String
+  createdAt DateTime @default(now())
+
+  admin         Admin?         @relation("UserAdmin")
+  donor         Donor?         @relation("UserDonor")
+  patient       Patient?       @relation("UserPatient")
+  hospitalStaff HospitalStaff? @relation("UserHospitalStaff")
+  ngoUser       NGOUser?       @relation("UserNGOUser")
+}
+
+model Admin {
+  adminId   Int        @id @default(autoincrement())
+  userId    Int        @unique
+  user      User       @relation("UserAdmin", fields: [userId], references: [userId])
+  campaigns Campaign[] @relation("AdminCreatesCampaigns")
+  ngoUsers  NGOUser[]  @relation("AdminCreatesNGOUsers")
+}
+
+model Donor {
+  donorId           Int     @id @default(autoincrement())
+  firstName         String
+  lastName          String
+  bloodType         String
+  age               Int
+  gender            String
+  address           String
+  latitude          Float?
+  longitude         Float?
+  donationFrequency String?
+  points            Int     @default(0)
+
+  userId Int  @unique
+  user   User @relation("UserDonor", fields: [userId], references: [userId])
+
+  appointments    Appointment[]    @relation("DonorBooksAppointments")
+  donationRecords DonationRecord[] @relation("DonorMakesDonations")
+}
+
+model Patient {
+  patientId Int      @id @default(autoincrement())
+  firstName String
+  lastName  String
+  bloodType String
+  address   String
+  phone     String
+  birthDate DateTime
+  gender    String
+
+  userId Int  @unique
+  user   User @relation("UserPatient", fields: [userId], references: [userId])
+
+  hospitalId Int
+  hospital   Hospital @relation("HospitalTreatsPatients", fields: [hospitalId], references: [hospitalId])
+
+  appointments      Appointment[]      @relation("PatientBooksAppointments")
+  emergencyRequests EmergencyRequest[] @relation("PatientCreatesRequests")
+}
+
+model Hospital {
+  hospitalId  Int    @id @default(autoincrement())
+  name        String
+  location    String
+  contactInfo String
+
+  patients Patient[]       @relation("HospitalTreatsPatients")
+  staff    HospitalStaff[] @relation("HospitalEngagesStaff")
+  ngos     NGO[]           @relation("HospitalNGOCollaboration")
+}
+
+model NGO {
+  ngoId       Int    @id @default(autoincrement())
+  name        String
+  location    String
+  contactInfo String
+
+  users     NGOUser[]  @relation("NGOOwnsUsers")
+  hospitals Hospital[] @relation("HospitalNGOCollaboration")
+}
+
+model NGOUser {
+  ngoUserId Int @id @default(autoincrement())
+
+  userId Int  @unique
+  user   User @relation("UserNGOUser", fields: [userId], references: [userId])
+
+  ngoId Int
+  ngo   NGO @relation("NGOOwnsUsers", fields: [ngoId], references: [ngoId])
+
+  createdByAdminId Int
+  createdByAdmin   Admin @relation("AdminCreatesNGOUsers", fields: [createdByAdminId], references: [adminId])
+}
+
+model HospitalStaff {
+  staffId Int @id @default(autoincrement())
+
+  userId Int  @unique
+  user   User @relation("UserHospitalStaff", fields: [userId], references: [userId])
+
+  hospitalId  Int
+  designation String
+
+  hospital Hospital @relation("HospitalEngagesStaff", fields: [hospitalId], references: [hospitalId])
+
+  donationRecords DonationRecord[] @relation("StaffCreatesDonations")
+}
+
+model Appointment {
+  appointmentId Int      @id @default(autoincrement())
+  date          DateTime
+  time          String
+  purpose       String
+  status        String
+
+  donorId Int?
+  donor   Donor? @relation("DonorBooksAppointments", fields: [donorId], references: [donorId])
+
+  patientId Int?
+  patient   Patient? @relation("PatientBooksAppointments", fields: [patientId], references: [patientId])
+
+  donationRecords DonationRecord[] @relation("AppointmentProducesDonations")
+}
+
+model DonationRecord {
+  donationId   Int      @id @default(autoincrement())
+  donationDate DateTime
+  bloodType    String
+  quantity     Int
+  status       String
+
+  donorId Int
+  donor   Donor @relation("DonorMakesDonations", fields: [donorId], references: [donorId])
+
+  appointmentId Int
+  appointment   Appointment @relation("AppointmentProducesDonations", fields: [appointmentId], references: [appointmentId])
+
+  staffId       Int
+  hospitalStaff HospitalStaff @relation("StaffCreatesDonations", fields: [staffId], references: [staffId])
+
+  rewardTransactions RewardTransaction[] @relation("DonationEarnsRewards")
+  emergencyRequests  EmergencyRequest[]  @relation("DonationFulfillsRequests")
+}
+
+model RewardTransaction {
+  rewardId     Int      @id @default(autoincrement())
+  pointsEarned Int
+  awardDate    DateTime
+  description  String
+
+  donationId Int
+  donation   DonationRecord @relation("DonationEarnsRewards", fields: [donationId], references: [donationId])
+}
+
+model EmergencyRequest {
+  requestId        Int      @id @default(autoincrement())
+  bloodType        String
+  quantityRequired Int
+  urgencyLevel     String
+  status           String
+  requestDate      DateTime
+  neededBy         DateTime
+
+  patientId Int
+  patient   Patient @relation("PatientCreatesRequests", fields: [patientId], references: [patientId])
+
+  donationRecords DonationRecord[] @relation("DonationFulfillsRequests")
+  alerts          Alert[]          @relation("RequestTriggersAlerts")
+}
+
+model Alert {
+  alertId   Int      @id @default(autoincrement())
+  alertType String
+  channel   String
+  message   String
+  sentAt    DateTime
+
+  requestId        Int
+  emergencyRequest EmergencyRequest @relation("RequestTriggersAlerts", fields: [requestId], references: [requestId])
+}
+
+model Campaign {
+  campaignId  Int      @id @default(autoincrement())
+  name        String
+  description String
+  startDate   DateTime
+  endDate     DateTime
+  location    String
+  status      String
+
+  createdByAdminId Int
+  createdByAdmin   Admin @relation("AdminCreatesCampaigns", fields: [createdByAdminId], references: [adminId])
+}
