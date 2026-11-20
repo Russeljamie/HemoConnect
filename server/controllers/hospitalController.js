@@ -1,0 +1,1532 @@
+const prisma = require("../services/prisma");
+const { processEmergencyRequest } = require("../services/donorMatching");
+const { getPatientRecipientIds, recordRequestEvent } = require("../services/requestEvents");
+const { latestDate } = require("../utils/donationEligibility");
+const { buildInsights, startOfUtcDay } = require("../services/stockInsights");
+
+const getHospitalStaff = async (userId) => prisma.hospitalStaff.findUnique({
+  where: { userId },
+  select: { staffId: true, hospitalId: true },
+});
+
+const createHospitalRequest = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const hospital = await prisma.hospital.findUnique({
+      where: { hospitalId: staff.hospitalId },
+      select: { hospitalId: true, latitude: true, longitude: true },
+    });
+    const latitude = req.body.latitude ?? hospital.latitude;
+    const longitude = req.body.longitude ?? hospital.longitude;
+    if (latitude === null || longitude === null || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Add a request location or configure your hospital coordinates before creating a request for donor matching.",
+      });
+    }
+    let emergencyRequest;
+    try {
+      emergencyRequest = await prisma.$transaction(async (tx) => {
+        let patient;
+        if (req.body.patientId) {
+          patient = await tx.patient.findFirst({
+            where: {
+              patientId: req.body.patientId,
+              OR: [{ hospitalId: staff.hospitalId }, { hospitalId: null }],
+            },
+            select: { patientId: true },
+          });
+          if (!patient) {
+            throw Object.assign(new Error("Patient record is not available to your hospital."), { status: 404 });
+          }
+          await tx.patient.updateMany({
+            where: { patientId: patient.patientId, hospitalId: null },
+            data: { hospitalId: staff.hospitalId },
+          });
+        } else {
+          const patientRecord = req.body.patient;
+          patient = await tx.patient.create({
+            data: {
+              firstName: patientRecord.firstName.trim(),
+              lastName: patientRecord.lastName.trim(),
+              phone: patientRecord.phone.trim(),
+              bloodType: patientRecord.bloodType || req.body.bloodType,
+              address: patientRecord.address?.trim() || null,
+              hospitalId: staff.hospitalId,
+              userId: null,
+            },
+            select: { patientId: true },
+          });
+        }
+
+        const created = await tx.emergencyRequest.create({
+          data: {
+            bloodType: req.body.bloodType,
+            quantityRequired: req.body.quantityRequired,
+            urgencyLevel: req.body.urgencyLevel,
+            status: "OPEN",
+            latitude,
+            longitude,
+            neededBy: req.body.neededBy,
+            notes: req.body.notes || null,
+            patientId: patient.patientId,
+            hospitalId: staff.hospitalId,
+            requestedByUserId: req.user.userId,
+            createdByStaffId: staff.staffId,
+          },
+        });
+
+        await recordRequestEvent(tx, {
+          request: created,
+          actorUserId: req.user.userId,
+          action: "OFFICIAL_REQUEST_CREATED",
+          toStatus: "OPEN",
+          details: { hospitalId: staff.hospitalId, patientId: patient.patientId },
+          title: "Official blood request created",
+          message: "Your hospital has verified and created an official blood request.",
+        });
+        return created;
+      });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+      throw error;
+    }
+
+    let matching = { alertedDonors: 0 };
+    if (emergencyRequest.latitude !== null && emergencyRequest.longitude !== null) {
+      try {
+        matching = { alertedDonors: await processEmergencyRequest(emergencyRequest.requestId) };
+      } catch (error) {
+        console.error(`Initial donor alert dispatch failed for official request ${emergencyRequest.requestId}:`, error);
+        matching = { alertedDonors: 0, pending: true };
+      }
+    }
+
+    const requestWithMatchingState = await prisma.emergencyRequest.findUnique({
+      where: { requestId: emergencyRequest.requestId },
+    });
+    return res.status(201).json({
+      success: true,
+      message: matching.pending
+        ? "Official request created; donor alerts will be retried."
+        : "Official blood request created.",
+      data: { request: requestWithMatchingState, matching },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const grantPatientAccess = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const patient = await prisma.patient.findFirst({
+      where: { patientId: Number(req.params.patientId), hospitalId: staff.hospitalId },
+      select: { patientId: true },
+    });
+    if (!patient) return res.status(404).json({ success: false, message: "Patient record not found." });
+
+    const representative = await prisma.user.findFirst({
+      where: { email: req.body.email.trim().toLowerCase(), role: "PATIENT", status: "ACTIVE" },
+      select: { userId: true },
+    });
+    if (!representative) {
+      return res.status(404).json({ success: false, message: "No active patient or family account was found for that email." });
+    }
+
+    const access = await prisma.patientAccess.upsert({
+      where: { patientId_userId: { patientId: patient.patientId, userId: representative.userId } },
+      create: {
+        patientId: patient.patientId,
+        userId: representative.userId,
+        relationship: req.body.relationship.trim(),
+        status: "ACTIVE",
+        grantedAt: new Date(),
+        grantedByUserId: req.user.userId,
+      },
+      update: {
+        relationship: req.body.relationship.trim(),
+        status: "ACTIVE",
+        grantedAt: new Date(),
+        revokedAt: null,
+        grantedByUserId: req.user.userId,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action: "PATIENT_ACCESS_GRANTED",
+        entityType: "Patient",
+        entityId: String(patient.patientId),
+        actorUserId: req.user.userId,
+        details: { representativeUserId: representative.userId, relationship: access.relationship },
+      },
+    });
+    return res.status(200).json({ success: true, message: "Patient access granted.", data: { access } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listHospitalEnquiries = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const enquiries = await prisma.assistanceEnquiry.findMany({
+      where: {
+        OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
+      },
+      include: {
+        patient: { select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true } },
+        preferredHospital: { select: { hospitalId: true, name: true } },
+        submittingUser: { select: { firstName: true, lastName: true, email: true, phone: true } },
+        reviewedByStaff: { select: { user: { select: { firstName: true, lastName: true } } } },
+      },
+      orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+    });
+    return res.status(200).json({ success: true, data: { enquiries } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reviewHospitalEnquiry = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const enquiryId = Number(req.params.enquiryId);
+    const status = req.body.decision === "VERIFY" ? "VERIFIED" : "REJECTED";
+    const enquiry = await prisma.$transaction(async (tx) => {
+      const current = await tx.assistanceEnquiry.findFirst({
+        where: {
+          enquiryId,
+          status: { in: ["PENDING_HOSPITAL_VERIFICATION", "UNDER_REVIEW"] },
+          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
+        },
+      });
+      if (!current) return null;
+      const result = await tx.assistanceEnquiry.updateMany({
+        where: {
+          enquiryId,
+          status: current.status,
+          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
+        },
+        data: {
+          status,
+          preferredHospitalId: staff.hospitalId,
+          reviewNotes: req.body.reviewNotes || null,
+          reviewedByStaffId: staff.staffId,
+          reviewedAt: new Date(),
+        },
+      });
+      if (!result.count) return null;
+
+      const updatedEnquiry = await tx.assistanceEnquiry.findUnique({
+        where: { enquiryId },
+        include: { patient: { select: { patientId: true } } },
+      });
+      const recipientIds = await getPatientRecipientIds(tx, updatedEnquiry.patientId);
+      if (updatedEnquiry.submittingUserId) recipientIds.push(updatedEnquiry.submittingUserId);
+      const uniqueRecipientIds = [...new Set(recipientIds)];
+      await tx.auditLog.create({
+        data: {
+          action: `ASSISTANCE_ENQUIRY_${status}`,
+          entityType: "AssistanceEnquiry",
+          entityId: String(enquiryId),
+          actorUserId: req.user.userId,
+          details: { status, hospitalId: staff.hospitalId, reviewNotes: updatedEnquiry.reviewNotes },
+        },
+      });
+      if (uniqueRecipientIds.length) {
+        await tx.notification.createMany({
+          data: uniqueRecipientIds.map((userId) => ({
+            type: "ASSISTANCE_ENQUIRY_UPDATE",
+            channel: "IN_APP",
+            title: status === "VERIFIED" ? "Enquiry verified" : "Enquiry reviewed",
+            message: status === "VERIFIED"
+              ? "The hospital verified your assistance enquiry. The hospital team can now create an official request."
+              : "The hospital reviewed your assistance enquiry.",
+            status: "SENT",
+            sentAt: new Date(),
+            userId,
+          })),
+        });
+      }
+      return updatedEnquiry;
+    });
+
+    if (!enquiry) {
+      const exists = await prisma.assistanceEnquiry.findUnique({
+        where: { enquiryId },
+        select: { enquiryId: true, preferredHospitalId: true, status: true },
+      });
+      if (!exists) return res.status(404).json({ success: false, message: "Assistance enquiry not found." });
+      return res.status(exists.preferredHospitalId && exists.preferredHospitalId !== staff.hospitalId ? 404 : 409).json({
+        success: false,
+        message: "This enquiry is not available for review.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: status === "VERIFIED" ? "Enquiry verified." : "Enquiry rejected.",
+      data: { enquiry },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const convertHospitalEnquiryToRequest = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const enquiryId = Number(req.params.enquiryId);
+    const emergencyRequest = await prisma.$transaction(async (tx) => {
+      const enquiry = await tx.assistanceEnquiry.findFirst({
+        where: {
+          enquiryId,
+          status: "VERIFIED",
+          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
+        },
+      });
+      if (!enquiry) {
+        const exists = await tx.assistanceEnquiry.findUnique({
+          where: { enquiryId },
+          select: { enquiryId: true, preferredHospitalId: true },
+        });
+        throw Object.assign(
+          new Error(!exists ? "Assistance enquiry not found." : "Only a verified enquiry assigned to your hospital can become an official request."),
+          { status: !exists ? 404 : 409 }
+        );
+      }
+
+      const hospital = await tx.hospital.findUnique({
+        where: { hospitalId: staff.hospitalId },
+        select: { latitude: true, longitude: true },
+      });
+      const latitude = req.body.latitude ?? enquiry.latitude ?? hospital.latitude;
+      const longitude = req.body.longitude ?? enquiry.longitude ?? hospital.longitude;
+      if (latitude === null || longitude === null || latitude === undefined || longitude === undefined) {
+        throw Object.assign(
+          new Error("Add a request location or configure your hospital coordinates before converting this enquiry."),
+          { status: 400 }
+        );
+      }
+      const created = await tx.emergencyRequest.create({
+        data: {
+          bloodType: enquiry.requestedBloodType,
+          quantityRequired: enquiry.quantityRequired,
+          urgencyLevel: enquiry.urgencyLevel,
+          status: "OPEN",
+          neededBy: enquiry.neededBy,
+          notes: enquiry.description,
+          latitude,
+          longitude,
+          patientId: enquiry.patientId,
+          hospitalId: staff.hospitalId,
+          requestedByUserId: req.user.userId,
+          createdByStaffId: staff.staffId,
+        },
+      });
+
+      const conversion = await tx.assistanceEnquiry.updateMany({
+        where: {
+          enquiryId,
+          status: "VERIFIED",
+          resultingRequestId: null,
+          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
+        },
+        data: { status: "CONVERTED", resultingRequestId: created.requestId },
+      });
+      if (!conversion.count) {
+        throw Object.assign(new Error("This enquiry was converted by another hospital staff member."), { status: 409 });
+      }
+      await recordRequestEvent(tx, {
+        request: created,
+        actorUserId: req.user.userId,
+        action: "OFFICIAL_REQUEST_CREATED_FROM_ENQUIRY",
+        toStatus: "OPEN",
+        details: { hospitalId: staff.hospitalId, enquiryId },
+        title: "Official blood request created",
+        message: "The hospital verified your enquiry and created an official blood request.",
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "ASSISTANCE_ENQUIRY_CONVERTED",
+          entityType: "AssistanceEnquiry",
+          entityId: String(enquiryId),
+          actorUserId: req.user.userId,
+          details: { requestId: created.requestId, hospitalId: staff.hospitalId },
+        },
+      });
+      const recipientIds = await getPatientRecipientIds(tx, enquiry.patientId);
+      if (enquiry.submittingUserId && !recipientIds.includes(enquiry.submittingUserId)) {
+        recipientIds.push(enquiry.submittingUserId);
+      }
+      if (recipientIds.length) {
+        await tx.notification.createMany({
+          data: recipientIds.map((userId) => ({
+            type: "ASSISTANCE_ENQUIRY_UPDATE",
+            channel: "IN_APP",
+            title: "Assistance enquiry converted",
+            message: "Your verified enquiry is now an official hospital blood request.",
+            status: "SENT",
+            sentAt: new Date(),
+            userId,
+          })),
+        });
+      }
+      return created;
+    }).catch((error) => {
+      if (error.status) return { workflowError: error };
+      throw error;
+    });
+    if (emergencyRequest.workflowError) {
+      const { status, message } = emergencyRequest.workflowError;
+      return res.status(status).json({ success: false, message });
+    }
+
+    let matching = { alertedDonors: 0 };
+    if (emergencyRequest.latitude !== null && emergencyRequest.longitude !== null) {
+      try {
+        matching = { alertedDonors: await processEmergencyRequest(emergencyRequest.requestId) };
+      } catch (error) {
+        console.error(`Initial donor alert dispatch failed for converted request ${emergencyRequest.requestId}:`, error);
+        matching = { alertedDonors: 0, pending: true };
+      }
+    }
+    const requestWithMatchingState = await prisma.emergencyRequest.findUnique({
+      where: { requestId: emergencyRequest.requestId },
+    });
+    return res.status(201).json({
+      success: true,
+      message: "Verified enquiry converted to an official request.",
+      data: { request: requestWithMatchingState, matching },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listHospitalPatients = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const patients = await prisma.patient.findMany({
+      where: { hospitalId: staff.hospitalId },
+      select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true },
+      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+    });
+    return res.status(200).json({ success: true, data: { patients } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listHospitalDonationNeeds = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const needs = await prisma.hospitalDonationNeed.findMany({
+      where: { hospitalId: staff.hospitalId },
+      include: { _count: { select: { campaigns: true } } },
+      orderBy: [{ neededBy: "asc" }, { createdAt: "desc" }],
+    });
+    return res.status(200).json({ success: true, data: { needs } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createHospitalDonationNeed = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const need = await prisma.$transaction(async (tx) => {
+      const created = await tx.hospitalDonationNeed.create({
+        data: {
+          bloodType: req.body.bloodType,
+          unitsNeeded: req.body.unitsNeeded,
+          neededBy: req.body.neededBy,
+          notes: req.body.notes || null,
+          hospitalId: staff.hospitalId,
+          createdByStaffId: staff.staffId,
+        },
+        include: { hospital: { select: { name: true } } },
+      });
+      const partnerNgos = await tx.nGO.findMany({
+        where: { hospitals: { some: { hospitalId: staff.hospitalId } }, isActive: true },
+        select: { users: { select: { userId: true } } },
+      });
+      const recipientIds = [...new Set(partnerNgos.flatMap(({ users }) => users.map(({ userId }) => userId)))];
+      if (recipientIds.length) {
+        await tx.notification.createMany({
+          data: recipientIds.map((userId) => ({
+            type: "HOSPITAL_DONATION_NEED",
+            channel: "IN_APP",
+            title: "Partner hospital donation need",
+            message: `${created.hospital.name} needs ${created.unitsNeeded} units of ${created.bloodType} blood by ${created.neededBy.toLocaleDateString()}.`,
+            status: "SENT",
+            sentAt: new Date(),
+            userId,
+          })),
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          action: "HOSPITAL_DONATION_NEED_CREATED",
+          entityType: "HospitalDonationNeed",
+          entityId: String(created.needId),
+          actorUserId: req.user.userId,
+          details: { hospitalId: staff.hospitalId, bloodType: created.bloodType, unitsNeeded: created.unitsNeeded },
+        },
+      });
+      return created;
+    });
+
+    return res.status(201).json({ success: true, message: "Donation need published to partner NGOs.", data: { need } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateHospitalDonationNeed = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const needId = Number(req.params.needId);
+    const existing = await prisma.hospitalDonationNeed.findFirst({
+      where: { needId, hospitalId: staff.hospitalId },
+    });
+    if (!existing) return res.status(404).json({ success: false, message: "Donation need not found." });
+
+    const allowed = {
+      OPEN: ["IN_PROGRESS", "FULFILLED", "CANCELLED"],
+      IN_PROGRESS: ["OPEN", "FULFILLED", "CANCELLED"],
+    };
+    if (!allowed[existing.status]?.includes(req.body.status)) {
+      return res.status(409).json({ success: false, message: `Cannot change a ${existing.status} donation need to ${req.body.status}.` });
+    }
+    const updated = await prisma.hospitalDonationNeed.updateMany({
+      where: { needId, hospitalId: staff.hospitalId, status: existing.status },
+      data: { status: req.body.status },
+    });
+    if (!updated.count) return res.status(409).json({ success: false, message: "Donation need changed. Refresh and retry." });
+    await prisma.auditLog.create({
+      data: {
+        action: "HOSPITAL_DONATION_NEED_STATUS_CHANGED",
+        entityType: "HospitalDonationNeed",
+        entityId: String(needId),
+        actorUserId: req.user.userId,
+        details: { fromStatus: existing.status, toStatus: req.body.status },
+      },
+    });
+    const need = await prisma.hospitalDonationNeed.findUnique({ where: { needId } });
+    return res.status(200).json({ success: true, message: "Donation need updated.", data: { need } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getHospitalStaffProfile = async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { userId: req.user.userId },
+      include: {
+        hospitalStaff: {
+          include: {
+            hospital: true,
+            donationRecords: {
+              orderBy: { donationDate: "desc" },
+              take: 6,
+            },
+            medicalCheckups: {
+              orderBy: { checkupDate: "desc" },
+              take: 4,
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Hospital staff profile not found.",
+      });
+    }
+
+    if (!user.hospitalStaff) {
+      return res.status(404).json({
+        success: false,
+        message: "This user does not have a hospital staff profile.",
+      });
+    }
+
+    const hospitalId = user.hospitalStaff.hospitalId;
+    const hospital = user.hospitalStaff.hospital;
+
+    const [inventory, pendingRequests, upcomingAppointments] = await Promise.all([
+      prisma.bloodInventory.findMany({
+        where: { hospitalId },
+        orderBy: { bloodType: "asc" },
+      }),
+      prisma.emergencyRequest.findMany({
+        where: { hospitalId },
+        orderBy: { neededBy: "asc" },
+        take: 5,
+      }),
+      prisma.appointment.findMany({
+        where: {
+          hospitalId,
+          date: {
+            gte: new Date(),
+          },
+        },
+        orderBy: { date: "asc" },
+        take: 5,
+      }),
+    ]);
+
+    const summaryFromRecords = user.hospitalStaff.donationRecords.reduce((acc, record) => {
+      const current = acc[record.bloodType] || { bloodType: record.bloodType, units: 0 };
+      current.units += record.status === "AVAILABLE" ? record.quantity : 0;
+      acc[record.bloodType] = current;
+      return acc;
+    }, {});
+
+    const inventorySummary = (inventory.length ? inventory : Object.values(summaryFromRecords)).map((item) => ({
+      bloodType: item.bloodType,
+      units: item.unitsAvailable ?? item.units ?? 0,
+      minimumUnits: item.minimumUnits ?? 5,
+      status: (item.unitsAvailable ?? item.units ?? 0) <= (item.minimumUnits ?? 5) ? "Low" : "Stable",
+    }));
+
+    const totalUnitsAvailable = inventorySummary.reduce((sum, item) => sum + item.units, 0);
+    const lowStockCount = inventorySummary.filter((item) => item.units <= item.minimumUnits).length;
+
+    const urgentRequests = pendingRequests.map((request) => ({
+      title: `${request.bloodType} Request`,
+      meta: request.urgencyLevel === "CRITICAL" ? "Critical case" : "Priority request",
+      sub: `${request.quantityRequired} units needed • ${request.status}`,
+      status: request.status,
+      neededBy: new Intl.DateTimeFormat("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      }).format(new Date(request.neededBy)),
+    }));
+
+    const upcomingAppointmentsList = upcomingAppointments.map((appointment) => ({
+      appointmentId: appointment.appointmentId,
+      date: new Intl.DateTimeFormat("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      }).format(new Date(appointment.date)),
+      time: appointment.time,
+      purpose: appointment.purpose,
+      status: appointment.status,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: "Hospital staff profile retrieved successfully",
+      data: {
+        user: {
+          userId: user.userId,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          designation: user.hospitalStaff.designation,
+          hospitalName: hospital?.name || null,
+          hospitalLocation: hospital?.location || null,
+        },
+        metrics: {
+          unitsAvailable: totalUnitsAvailable,
+          lowStock: lowStockCount,
+          scheduledDonations: upcomingAppointmentsList.length,
+          pendingRequests: pendingRequests.filter((request) =>
+            ["PENDING", "OPEN", "URGENT"].includes(request.status)
+          ).length,
+        },
+        inventorySummary,
+        urgentRequests,
+        upcomingAppointments: upcomingAppointmentsList,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getHospitalInventory = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const inventory = await prisma.bloodInventory.findMany({
+      where: { hospitalId: staff.hospitalId },
+      orderBy: { bloodType: "asc" },
+    });
+
+    return res.status(200).json({ success: true, data: { inventory } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getHospitalStockInsights = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    const [inventory, settings] = await Promise.all([
+      prisma.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId }, orderBy: { bloodType: "asc" } }),
+      prisma.hospitalStockSettings.findUnique({ where: { hospitalId: staff.hospitalId } }),
+    ]);
+    const windowDays = settings?.historicalWindowDays || 30;
+    const since = new Date(startOfUtcDay(new Date()).getTime() - 2 * windowDays * 24 * 60 * 60 * 1000);
+    const transactions = inventory.length ? await prisma.inventoryTransaction.findMany({
+      where: {
+        inventoryId: { in: inventory.map((item) => item.inventoryId) },
+        transactionType: "REQUEST_FULFILLMENT",
+        unitsChanged: { lt: 0 },
+        createdAt: { gte: since },
+      },
+      select: { inventoryId: true, transactionType: true, unitsChanged: true, createdAt: true, inventory: { select: { bloodType: true } } },
+      orderBy: { createdAt: "asc" },
+    }) : [];
+    const normalized = transactions.map(({ inventory, ...transaction }) => ({ ...transaction, bloodType: inventory.bloodType }));
+    const insights = buildInsights({ inventory, transactions: normalized, settings });
+    return res.status(200).json({ success: true, data: insights });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateHospitalStockSettings = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    const settings = await prisma.$transaction(async (tx) => {
+      const saved = await tx.hospitalStockSettings.upsert({
+        where: { hospitalId: staff.hospitalId },
+        create: {
+          hospitalId: staff.hospitalId,
+          historicalWindowDays: req.body.historicalWindowDays,
+          replenishmentLeadTimeDays: req.body.replenishmentLeadTimeDays,
+          safetyBufferDays: req.body.safetyBufferDays,
+        },
+        update: {
+          historicalWindowDays: req.body.historicalWindowDays,
+          replenishmentLeadTimeDays: req.body.replenishmentLeadTimeDays,
+          safetyBufferDays: req.body.safetyBufferDays,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "HOSPITAL_STOCK_SETTINGS_UPDATED",
+          entityType: "HospitalStockSettings",
+          entityId: String(saved.settingsId),
+          actorUserId: req.user.userId,
+          details: {
+            hospitalId: staff.hospitalId,
+            historicalWindowDays: saved.historicalWindowDays,
+            replenishmentLeadTimeDays: saved.replenishmentLeadTimeDays,
+            safetyBufferDays: saved.safetyBufferDays,
+          },
+        },
+      });
+      return saved;
+    });
+    return res.status(200).json({ success: true, message: "Stock insight settings saved.", data: { settings } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const decideHospitalStockThreshold = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    const inventoryId = Number(req.params.inventoryId);
+    const result = await prisma.$transaction(async (tx) => {
+      const inventory = await tx.bloodInventory.findFirst({ where: { inventoryId, hospitalId: staff.hospitalId } });
+      if (!inventory) return { error: "NOT_FOUND" };
+      const settings = await tx.hospitalStockSettings.findUnique({ where: { hospitalId: staff.hospitalId } });
+      const windowDays = settings?.historicalWindowDays || 30;
+      const since = new Date(startOfUtcDay(new Date()).getTime() - 2 * windowDays * 24 * 60 * 60 * 1000);
+      const transactions = await tx.inventoryTransaction.findMany({
+        where: { inventoryId, transactionType: "REQUEST_FULFILLMENT", unitsChanged: { lt: 0 }, createdAt: { gte: since } },
+        select: { transactionId: true, inventoryId: true, unitsChanged: true, createdAt: true },
+      });
+      const [allInventory] = await Promise.all([
+        tx.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId } }),
+      ]);
+      const calculation = buildInsights({ inventory: allInventory, transactions: transactions.map((item) => ({ ...item, bloodType: inventory.bloodType })), settings });
+      const recommendation = calculation.recommendations.find((item) => item.inventoryId === inventoryId);
+      if (req.body.decision === "ACCEPT_RECOMMENDED" && recommendation?.recommendedThreshold === null) return { error: "NO_RECOMMENDATION" };
+      const nextThreshold = req.body.decision === "ACCEPT_RECOMMENDED"
+        ? recommendation.recommendedThreshold
+        : req.body.decision === "OVERRIDE"
+          ? req.body.minimumUnits
+          : inventory.minimumUnits;
+      let updated = inventory;
+      if (nextThreshold !== inventory.minimumUnits) {
+        const changed = await tx.bloodInventory.updateMany({
+          where: { inventoryId, hospitalId: staff.hospitalId, minimumUnits: inventory.minimumUnits },
+          data: { minimumUnits: nextThreshold },
+        });
+        if (!changed.count) return { error: "CHANGED" };
+        updated = await tx.bloodInventory.findFirst({ where: { inventoryId, hospitalId: staff.hospitalId } });
+      }
+      await tx.auditLog.create({
+        data: {
+          action: "STOCK_THRESHOLD_DECISION",
+          entityType: "BloodInventory",
+          entityId: String(inventoryId),
+          actorUserId: req.user.userId,
+          details: {
+            hospitalId: staff.hospitalId,
+            bloodType: inventory.bloodType,
+            decision: req.body.decision,
+            previousThreshold: inventory.minimumUnits,
+            newThreshold: updated.minimumUnits,
+            reason: req.body.reason || null,
+            recommendationGeneratedAt: calculation.generatedAt,
+            calculation: recommendation,
+            settings: settings || null,
+            sourceTransactionIds: transactions.map((transaction) => transaction.transactionId),
+          },
+        },
+      });
+      return { inventory: updated };
+    });
+    if (result.error) {
+      const errors = {
+        NOT_FOUND: [404, "Inventory record not found."],
+        NO_RECOMMENDATION: [409, "There is not enough configured usage data to accept a threshold recommendation."],
+        CHANGED: [409, "The inventory threshold changed. Refresh and retry."],
+      };
+      const [status, message] = errors[result.error];
+      return res.status(status).json({ success: false, message });
+    }
+    return res.status(200).json({ success: true, message: "Threshold decision recorded.", data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getHospitalStockReport = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const to = req.query.to ? new Date(req.query.to) : new Date();
+    to.setUTCHours(23, 59, 59, 999);
+    const inventory = await prisma.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId }, orderBy: { bloodType: "asc" } });
+    const transactions = inventory.length ? await prisma.inventoryTransaction.findMany({
+      where: {
+        inventoryId: { in: inventory.map((item) => item.inventoryId) },
+        transactionType: "REQUEST_FULFILLMENT",
+        unitsChanged: { lt: 0 },
+        createdAt: { gte: from, lte: to },
+        ...(req.query.bloodType ? { inventory: { bloodType: req.query.bloodType } } : {}),
+      },
+      select: { unitsChanged: true, createdAt: true, inventory: { select: { bloodType: true } } },
+      orderBy: { createdAt: "asc" },
+    }) : [];
+    const dayCount = Math.max(1, Math.ceil((to - from + 1) / (24 * 60 * 60 * 1000)));
+    const byType = new Map();
+    for (const transaction of transactions) {
+      const row = byType.get(transaction.inventory.bloodType) || { bloodType: transaction.inventory.bloodType, totalUnitsIssued: 0, transactions: 0, dailyUsage: {} };
+      const units = Math.abs(transaction.unitsChanged);
+      row.totalUnitsIssued += units;
+      row.transactions += 1;
+      const day = transaction.createdAt.toISOString().slice(0, 10);
+      row.dailyUsage[day] = (row.dailyUsage[day] || 0) + units;
+      byType.set(row.bloodType, row);
+    }
+    const usage = [...byType.values()].map((row) => ({
+      ...row,
+      averageDailyUsage: row.totalUnitsIssued / dayCount,
+      dailyUsage: Object.entries(row.dailyUsage).map(([date, unitsIssued]) => ({ date, unitsIssued })).sort((a, b) => a.date.localeCompare(b.date)),
+    }));
+    const auditHistory = await prisma.auditLog.findMany({
+      where: {
+        entityType: "BloodInventory",
+        entityId: { in: inventory.map((item) => String(item.inventoryId)) },
+        action: "STOCK_THRESHOLD_DECISION",
+        createdAt: { gte: from, lte: to },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { entityId: true, action: true, details: true, createdAt: true, actorUser: { select: { firstName: true, lastName: true } } },
+    });
+    const filteredAuditHistory = req.query.bloodType
+      ? auditHistory.filter((entry) => entry.details?.bloodType === req.query.bloodType)
+      : auditHistory;
+    return res.status(200).json({ success: true, data: { from, to, dayCount, usage, thresholdDecisions: filteredAuditHistory } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const adjustHospitalInventory = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const { bloodType, unitsChange, reason } = req.body;
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.bloodInventory.findUnique({
+        where: { hospitalId_bloodType: { hospitalId: staff.hospitalId, bloodType } },
+      });
+
+      let inventory;
+      if (!existing) {
+        if (unitsChange < 0) return { insufficientStock: true };
+        inventory = await tx.bloodInventory.create({
+          data: { hospitalId: staff.hospitalId, bloodType, unitsAvailable: unitsChange },
+        });
+      } else {
+        const update = await tx.bloodInventory.updateMany({
+          where: {
+            inventoryId: existing.inventoryId,
+            unitsAvailable: { gte: Math.max(0, -unitsChange) },
+          },
+          data: { unitsAvailable: { increment: unitsChange } },
+        });
+        if (!update.count) return { insufficientStock: true };
+        inventory = await tx.bloodInventory.findUnique({
+          where: { inventoryId: existing.inventoryId },
+        });
+      }
+
+      await tx.inventoryTransaction.create({
+        data: {
+          transactionType: unitsChange > 0 ? "STOCK_ADDITION" : "STOCK_REMOVAL",
+          unitsChanged: unitsChange,
+          reason: reason || null,
+          inventoryId: inventory.inventoryId,
+          performedByUserId: req.user.userId,
+        },
+      });
+      return { inventory };
+    });
+
+    if (result.insufficientStock) {
+      return res.status(409).json({
+        success: false,
+        message: "The adjustment would reduce available stock below zero.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Inventory updated.",
+      data: { inventory: result.inventory },
+    });
+  } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(409).json({ success: false, message: "Inventory changed concurrently. Refresh and retry." });
+    }
+    next(error);
+  }
+};
+
+const listHospitalRequests = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const requests = await prisma.emergencyRequest.findMany({
+      where: {
+        OR: [
+          { hospitalId: staff.hospitalId },
+          {
+            hospitalId: null,
+            status: { in: ["OPEN", "PENDING", "URGENT"] },
+            neededBy: { gte: today },
+          },
+        ],
+      },
+      include: {
+        patient: { select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true } },
+        hospital: { select: { hospitalId: true, name: true } },
+        matches: { select: { status: true } },
+        inventoryTransactions: {
+          select: { transactionId: true, transactionType: true, unitsChanged: true, createdAt: true },
+        },
+      },
+      orderBy: [{ neededBy: "asc" }, { requestDate: "desc" }],
+    });
+    const requestIds = requests.map(({ requestId }) => String(requestId));
+    const auditHistory = requestIds.length ? await prisma.auditLog.findMany({
+      where: { entityType: "EmergencyRequest", entityId: { in: requestIds } },
+      orderBy: { createdAt: "asc" },
+      select: { auditLogId: true, entityId: true, action: true, details: true, createdAt: true },
+    }) : [];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        requests: requests.map((request) => ({
+          ...request,
+          history: auditHistory.filter((event) => event.entityId === String(request.requestId)),
+        })),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateHospitalRequest = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const requestId = Number(req.params.requestId);
+    const nextStatus = req.body.status;
+    const isClaiming = nextStatus === "IN_PROGRESS";
+    const outcome = await prisma.$transaction(async (tx) => {
+      const current = await tx.emergencyRequest.findFirst({
+        where: {
+          requestId,
+          ...(isClaiming
+            ? {
+              status: { in: ["OPEN", "PENDING", "URGENT"] },
+              OR: [{ hospitalId: null }, { hospitalId: staff.hospitalId }],
+            }
+            : { status: "IN_PROGRESS", hospitalId: staff.hospitalId }),
+        },
+      });
+      if (!current) return null;
+
+      const data = isClaiming
+        ? { status: "IN_PROGRESS", hospitalId: staff.hospitalId }
+        : {
+          status: "OPEN",
+          ...(current.createdByStaffId ? {} : { hospitalId: null }),
+        };
+      const result = await tx.emergencyRequest.updateMany({
+        where: { requestId, status: current.status, hospitalId: current.hospitalId },
+        data,
+      });
+      if (!result.count) return null;
+
+      const updatedRequest = { ...current, ...data };
+      await recordRequestEvent(tx, {
+        request: updatedRequest,
+        actorUserId: req.user.userId,
+        action: isClaiming ? "REQUEST_CLAIMED" : "REQUEST_RELEASED",
+        fromStatus: current.status,
+        toStatus: updatedRequest.status,
+        details: { hospitalId: staff.hospitalId },
+        title: "Blood request status updated",
+        message: isClaiming
+          ? "A hospital blood bank team is coordinating your request."
+          : current.createdByStaffId
+            ? "Your request has been returned to your hospital's open list."
+            : "Your request has been returned to the open hospital queue.",
+      });
+      return updatedRequest;
+    });
+
+    if (!outcome) {
+      const exists = await prisma.emergencyRequest.findUnique({ where: { requestId }, select: { requestId: true } });
+      return res.status(exists ? 409 : 404).json({
+        success: false,
+        message: exists ? "This request is no longer available for that action." : "Request not found.",
+      });
+    }
+
+    const emergencyRequest = await prisma.emergencyRequest.findUnique({
+      where: { requestId },
+      include: { hospital: { select: { hospitalId: true, name: true } } },
+    });
+    return res.status(200).json({
+      success: true,
+      message: isClaiming
+        ? "Request assigned to your hospital."
+        : outcome.createdByStaffId
+          ? "Request returned to your hospital's open list."
+          : "Request released to the open queue.",
+      data: { request: emergencyRequest },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const fulfillHospitalRequest = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+
+    const requestId = Number(req.params.requestId);
+    const fulfilled = await prisma.$transaction(async (tx) => {
+      const emergencyRequest = await tx.emergencyRequest.findFirst({
+        where: {
+          requestId,
+          hospitalId: staff.hospitalId,
+          status: { in: ["OPEN", "IN_PROGRESS", "PARTIALLY_FULFILLED"] },
+        },
+      });
+      if (!emergencyRequest) return { error: "NOT_FOUND" };
+
+      const cumulativeQuantity = (emergencyRequest.fulfilledQuantity || 0) + req.body.quantity;
+      if (cumulativeQuantity > emergencyRequest.quantityRequired) return { error: "OVER_FULFILLMENT" };
+
+      const inventory = await tx.bloodInventory.findUnique({
+        where: {
+          hospitalId_bloodType: {
+            hospitalId: staff.hospitalId,
+            bloodType: emergencyRequest.bloodType,
+          },
+        },
+      });
+      if (!inventory || inventory.unitsAvailable < req.body.quantity) return { error: "INSUFFICIENT_STOCK" };
+
+      const stockUpdate = await tx.bloodInventory.updateMany({
+        where: { inventoryId: inventory.inventoryId, unitsAvailable: { gte: req.body.quantity } },
+        data: { unitsAvailable: { decrement: req.body.quantity } },
+      });
+      if (!stockUpdate.count) return { error: "INSUFFICIENT_STOCK" };
+
+      const nextStatus = cumulativeQuantity >= emergencyRequest.quantityRequired
+        ? "FULFILLED"
+        : "PARTIALLY_FULFILLED";
+      const requestUpdate = await tx.emergencyRequest.updateMany({
+        where: {
+          requestId,
+          hospitalId: staff.hospitalId,
+          status: emergencyRequest.status,
+          fulfilledQuantity: emergencyRequest.fulfilledQuantity,
+        },
+        data: {
+          fulfilledQuantity: cumulativeQuantity,
+          fulfilledAt: nextStatus === "FULFILLED" ? new Date() : null,
+          status: nextStatus,
+          outcomeNotes: req.body.outcomeNotes || emergencyRequest.outcomeNotes,
+        },
+      });
+      if (!requestUpdate.count) {
+        throw Object.assign(new Error("Request fulfillment changed concurrently."), { workflowError: "REQUEST_CHANGED" });
+      }
+
+      await tx.inventoryTransaction.create({
+        data: {
+          transactionType: "REQUEST_FULFILLMENT",
+          unitsChanged: -req.body.quantity,
+          reason: `Fulfillment for emergency request ${requestId}`,
+          inventoryId: inventory.inventoryId,
+          performedByUserId: req.user.userId,
+          requestId,
+        },
+      });
+
+      const updatedRequest = await tx.emergencyRequest.findUnique({ where: { requestId } });
+      await recordRequestEvent(tx, {
+        request: updatedRequest,
+        actorUserId: req.user.userId,
+        action: "REQUEST_FULFILLMENT_RECORDED",
+        fromStatus: emergencyRequest.status,
+        toStatus: nextStatus,
+        details: { quantityThisTransaction: req.body.quantity, fulfilledQuantity: cumulativeQuantity },
+        title: nextStatus === "FULFILLED" ? "Request fulfilled" : "Request partially fulfilled",
+        message: nextStatus === "FULFILLED"
+          ? "The hospital recorded fulfillment of your blood request."
+          : "The hospital recorded a partial fulfillment of your blood request.",
+      });
+      return { request: updatedRequest };
+    });
+
+    if (fulfilled.error) {
+      const messages = {
+        NOT_FOUND: [404, "Request not found in your hospital or it is not fulfillable."],
+        OVER_FULFILLMENT: [409, "Fulfillment quantity exceeds the remaining request."],
+        INSUFFICIENT_STOCK: [409, "Your hospital does not have enough available inventory to fulfill this quantity."],
+      };
+      const [statusCode, message] = messages[fulfilled.error];
+      return res.status(statusCode).json({ success: false, message });
+    }
+    return res.status(200).json({
+      success: true,
+      message: `Recorded fulfillment. Request status: ${fulfilled.request.status}.`,
+      data: { request: fulfilled.request },
+    });
+  } catch (error) {
+    if (error.workflowError === "REQUEST_CHANGED") {
+      return res.status(409).json({ success: false, message: "Request fulfillment changed concurrently. Refresh and retry." });
+    }
+    next(error);
+  }
+};
+
+const getAppointmentDetails = {
+  include: {
+    donor: {
+      select: {
+        firstName: true,
+        lastName: true,
+        bloodType: true,
+        user: { select: { email: true, phone: true } },
+      },
+    },
+    patient: {
+      select: {
+        firstName: true,
+        lastName: true,
+        bloodType: true,
+        phone: true,
+        user: { select: { email: true } },
+      },
+    },
+  },
+};
+
+const listHospitalAppointments = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const appointments = await prisma.appointment.findMany({
+      where: { hospitalId: staff.hospitalId },
+      ...getAppointmentDetails,
+      orderBy: [{ date: "asc" }, { time: "asc" }],
+    });
+
+    return res.status(200).json({ success: true, data: { appointments } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listHospitalAppointmentSlots = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const slots = await prisma.appointmentSlot.findMany({
+      where: { hospitalId: staff.hospitalId, slotDate: { gte: today } },
+      orderBy: [{ slotDate: "asc" }, { time: "asc" }],
+    });
+    return res.status(200).json({ success: true, data: { slots } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createHospitalAppointmentSlot = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+    const hospital = await prisma.hospital.findUnique({
+      where: { hospitalId: staff.hospitalId },
+      select: { latitude: true, longitude: true },
+    });
+    if (!hospital || hospital.latitude === null || hospital.longitude === null) {
+      return res.status(409).json({
+        success: false,
+        message: "This hospital has no saved map location. Contact a system administrator to add its permanent pin before publishing availability.",
+      });
+    }
+
+    const slotDate = new Date(`${req.body.date}T00:00:00.000Z`);
+    const slot = await prisma.appointmentSlot.create({
+      data: {
+        hospitalId: staff.hospitalId,
+        createdByStaffId: staff.staffId,
+        slotDate,
+        time: req.body.time,
+        capacity: req.body.capacity,
+      },
+    });
+    return res.status(201).json({ success: true, message: "Appointment slot published.", data: { slot } });
+  } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(409).json({ success: false, message: "A slot already exists for that date and time." });
+    }
+    next(error);
+  }
+};
+
+const updateHospitalAppointmentSlot = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+    const result = await prisma.appointmentSlot.updateMany({
+      where: { slotId: Number(req.params.slotId), hospitalId: staff.hospitalId },
+      data: { status: req.body.status },
+    });
+    if (!result.count) {
+      return res.status(404).json({ success: false, message: "Appointment slot not found." });
+    }
+    const slot = await prisma.appointmentSlot.findUnique({ where: { slotId: Number(req.params.slotId) } });
+    return res.status(200).json({ success: true, message: "Appointment slot updated.", data: { slot } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateHospitalAppointment = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const appointmentId = Number(req.params.appointmentId);
+    const appointment = await prisma.appointment.findFirst({
+      where: { appointmentId, hospitalId: staff.hospitalId },
+      select: { appointmentId: true, status: true, purpose: true },
+    });
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: "Appointment not found." });
+    }
+
+    const allowedTransitions = {
+      SCHEDULED: ["CONFIRMED", "CANCELLED"],
+      CONFIRMED: ["COMPLETED", "CANCELLED"],
+    };
+    const nextStatus = req.body.status;
+    if (
+      nextStatus === "COMPLETED" &&
+      appointment.purpose.toLowerCase() === "blood donation"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "Record the successful donation after hospital clearance to complete this donation appointment.",
+      });
+    }
+    if (!allowedTransitions[appointment.status]?.includes(nextStatus)) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot change an appointment from ${appointment.status} to ${nextStatus}.`,
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.appointment.findFirst({
+        where: { appointmentId, hospitalId: staff.hospitalId, status: appointment.status },
+        select: { appointmentId: true, slotId: true },
+      });
+      if (!current) return 0;
+      const updated = await tx.appointment.updateMany({
+        where: { appointmentId, hospitalId: staff.hospitalId, status: appointment.status },
+        data: { status: nextStatus },
+      });
+      if (updated.count && nextStatus === "CANCELLED" && current.slotId) {
+        await tx.appointmentSlot.updateMany({
+          where: { slotId: current.slotId, bookedCount: { gt: 0 } },
+          data: { bookedCount: { decrement: 1 } },
+        });
+      }
+      return updated.count;
+    });
+    if (!result) {
+      return res.status(409).json({ success: false, message: "Appointment status changed. Refresh and retry." });
+    }
+
+    const updatedAppointment = await prisma.appointment.findUnique({
+      where: { appointmentId },
+      ...getAppointmentDetails,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Appointment status updated.",
+      data: { appointment: updatedAppointment },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const recordHospitalAppointmentDonation = async (req, res, next) => {
+  try {
+    const staff = await getHospitalStaff(req.user.userId);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const appointmentId = Number(req.params.appointmentId);
+    const outcome = await prisma.$transaction(async (tx) => {
+      const appointment = await tx.appointment.findFirst({
+        where: {
+          appointmentId,
+          hospitalId: staff.hospitalId,
+          status: "CONFIRMED",
+          purpose: { equals: "Blood Donation", mode: "insensitive" },
+          date: { lte: new Date() },
+          donorId: { not: null },
+        },
+        select: {
+          appointmentId: true,
+          donorId: true,
+          donor: { select: { bloodType: true, lastDonationDate: true } },
+        },
+      });
+      if (!appointment) return { error: "APPOINTMENT_NOT_ELIGIBLE" };
+      if (!appointment.donor?.bloodType) return { error: "MISSING_BLOOD_TYPE" };
+
+      const completed = await tx.appointment.updateMany({
+        where: { appointmentId, hospitalId: staff.hospitalId, status: "CONFIRMED" },
+        data: { status: "COMPLETED" },
+      });
+      if (!completed.count) {
+        throw Object.assign(new Error("Appointment status changed while recording donation."), {
+          workflowError: "APPOINTMENT_CHANGED",
+        });
+      }
+
+      const donation = await tx.donationRecord.create({
+        data: {
+          donationDate: new Date(),
+          bloodType: appointment.donor.bloodType,
+          quantity: req.body.quantity,
+          status: "AVAILABLE",
+          notes: req.body.notes || null,
+          donorId: appointment.donorId,
+          appointmentId,
+          staffId: staff.staffId,
+          hospitalId: staff.hospitalId,
+        },
+      });
+      await tx.donor.update({
+        where: { donorId: appointment.donorId },
+        data: {
+          lastDonationDate: latestDate(
+            appointment.donor.lastDonationDate,
+            donation.donationDate
+          ),
+        },
+      });
+      return { donation };
+    });
+
+    if (outcome.error === "APPOINTMENT_NOT_ELIGIBLE") {
+      return res.status(409).json({
+        success: false,
+        message: "Only a confirmed, due blood donation appointment at your hospital can be recorded.",
+      });
+    }
+    if (outcome.error === "MISSING_BLOOD_TYPE") {
+      return res.status(409).json({
+        success: false,
+        message: "The donor profile needs a blood type before a successful donation can be recorded.",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Successful donation recorded after hospital clearance.",
+      data: { donation: outcome.donation },
+    });
+  } catch (error) {
+    if (error.workflowError === "APPOINTMENT_CHANGED" || error.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "A donation has already been recorded for this appointment or its status changed.",
+      });
+    }
+    next(error);
+  }
+};
+
+const listHospitalStaff = async (req, res, next) => {
+  try {
+    const staffMember = await getHospitalStaff(req.user.userId);
+    if (!staffMember) {
+      return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
+    }
+
+    const staff = await prisma.hospitalStaff.findMany({
+      where: { hospitalId: staffMember.hospitalId },
+      select: {
+        staffId: true,
+        designation: true,
+        createdAt: true,
+        user: {
+          select: {
+            userId: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: [{ user: { firstName: "asc" } }, { user: { lastName: "asc" } }],
+    });
+
+    return res.status(200).json({ success: true, data: { staff } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  getHospitalStaffProfile,
+  getHospitalInventory,
+  getHospitalStockInsights,
+  updateHospitalStockSettings,
+  decideHospitalStockThreshold,
+  getHospitalStockReport,
+  adjustHospitalInventory,
+  createHospitalRequest,
+  grantPatientAccess,
+  listHospitalEnquiries,
+  reviewHospitalEnquiry,
+  convertHospitalEnquiryToRequest,
+  listHospitalPatients,
+  listHospitalDonationNeeds,
+  createHospitalDonationNeed,
+  updateHospitalDonationNeed,
+  listHospitalRequests,
+  updateHospitalRequest,
+  fulfillHospitalRequest,
+  listHospitalAppointments,
+  listHospitalAppointmentSlots,
+  createHospitalAppointmentSlot,
+  updateHospitalAppointmentSlot,
+  recordHospitalAppointmentDonation,
+  updateHospitalAppointment,
+  listHospitalStaff,
+};
