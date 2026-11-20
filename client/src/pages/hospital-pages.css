@@ -1,0 +1,241 @@
+.hospital-stock-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e8ebf0;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.hospital-stock-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #556174;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.hospital-stock-form input,
+.hospital-stock-form select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #dfe4eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #263043;
+  font: inherit;
+  font-size: 12px;
+}
+
+.hospital-form-optional {
+  color: #8791a0;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.hospital-stock-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.hospital-request-create-form,
+.hospital-access-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.hospital-request-create-form h2,
+.hospital-request-create-form > p,
+.hospital-request-create-form .hospital-form-wide,
+.hospital-request-create-form > button,
+.hospital-access-form h2 {
+  grid-column: 1 / -1;
+}
+
+.hospital-request-create-form h2,
+.hospital-access-form h2,
+.hospital-enquiries-list > h2 {
+  margin: 0;
+  color: #182134;
+  font-size: 15px;
+}
+
+.hospital-request-create-form > p {
+  margin: -8px 0 0;
+  color: #778294;
+  font-size: 11px;
+}
+
+.hospital-enquiries-list {
+  display: grid;
+  gap: 12px;
+}
+
+.hospital-enquiries-guidance {
+  margin: -4px 0 0;
+  color: #778294;
+  font-size: 11px;
+}
+
+.hospital-enquiry-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #e8ebf0;
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: #344054;
+  font-size: 12px;
+}
+
+.hospital-enquiry-card p {
+  margin: 6px 0;
+}
+
+.hospital-enquiry-card small {
+  color: #778294;
+  font-size: 10px;
+}
+
+.hospital-enquiry-reviewer {
+  display: block;
+  margin-top: 5px;
+}
+
+.hospital-enquiry-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.hospital-enquiry-actions input {
+  width: min(170px, 100%);
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid #dfe4eb;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+}
+
+.hospital-enquiry-actions .hospital-form-optional {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hospital-fulfillment-control {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.hospital-fulfillment-control input {
+  width: 72px;
+  min-height: 30px;
+  padding: 0 7px;
+  border: 1px solid #dfe4eb;
+  border-radius: 5px;
+  font: inherit;
+}
+
+.hospital-access-form {
+  align-items: end;
+}
+
+.hospital-inventory-table {
+  min-width: 700px;
+}
+
+.hospital-requests-table {
+  min-width: 980px;
+}
+
+.hospital-appointments-table {
+  min-width: 940px;
+}
+
+.hospital-staff-table {
+  min-width: 720px;
+}
+
+.hospital-staff-table a {
+  color: #2d6cdf;
+  text-decoration: none;
+}
+
+.hospital-staff-table a:hover {
+  text-decoration: underline;
+}
+
+.hospital-appointment-actions {
+  white-space: nowrap;
+}
+
+.hospital-stock-low {
+  background: #fff0f1;
+  color: #a51f30;
+}
+
+.hospital-requests-table td svg {
+  vertical-align: -2px;
+  color: #a51f30;
+}
+
+@media (max-width: 900px) {
+  .hospital-stock-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hospital-request-create-form,
+  .hospital-access-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .hospital-stock-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hospital-enquiry-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hospital-enquiry-card > .donor-status-tag {
+    justify-self: start;
+  }
+}
+.hospital-appointment-management {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e8ebf0;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.hospital-appointment-management h2 {
+  margin: 0;
+  color: #182134;
+  font-size: 15px;
+}
+
+.hospital-appointment-management > p {
+  margin: 0;
+  color: #778294;
+  font-size: 11px;
+}
+
+.hospital-appointment-management .donor-appointment-form {
+  margin: 0;
+}
