@@ -1,3 +1,4 @@
+
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/prisma"
@@ -15,110 +16,200 @@ model User {
   phone     String
   password  String
   role      String
-  status    String
+  status    String   @default("ACTIVE")
+  mustChangePassword Boolean @default(false)
   createdAt DateTime @default(now())
 
-  admin         Admin?         @relation("UserAdmin")
-  donor         Donor?         @relation("UserDonor")
-  patient       Patient?       @relation("UserPatient")
-  hospitalStaff HospitalStaff? @relation("UserHospitalStaff")
-  ngoUser       NGOUser?       @relation("UserNGOUser")
+updatedAt DateTime @default(now()) @updatedAt
+
+
+  admin                   Admin?
+  donor                   Donor?
+  patient                 Patient?
+  hospitalStaff           HospitalStaff?
+  ngoUser                 NGOUser?
+  notifications           Notification[]
+  alerts                  Alert[]                @relation("UserReceivesAlerts")
+  auditLogs               AuditLog[]             @relation("UserAuditLogs")
+  inventoryTransactions   InventoryTransaction[] @relation("UserInventoryTransactions")
+  createdEmergencyRequests EmergencyRequest[]     @relation("UserCreatesEmergencyRequests")
+  submittedAssistanceEnquiries AssistanceEnquiry[] @relation("UserSubmitsAssistanceEnquiries")
+  patientAccessGrants PatientAccess[] @relation("PatientAccessGrantee")
+  grantedPatientAccess PatientAccess[] @relation("PatientAccessGrantor")
+  passwordResetTokens PasswordResetToken[]
 }
 
 model Admin {
-  adminId   Int        @id @default(autoincrement())
-  userId    Int        @unique
-  user      User       @relation("UserAdmin", fields: [userId], references: [userId])
-  campaigns Campaign[] @relation("AdminCreatesCampaigns")
-  ngoUsers  NGOUser[]  @relation("AdminCreatesNGOUsers")
+  adminId Int @id @default(autoincrement())
+  userId  Int @unique
+  user    User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  campaigns Campaign[]
+  ngoUsers  NGOUser[] @relation("AdminCreatesNGOUsers")
 }
 
+
 model Donor {
-  donorId           Int     @id @default(autoincrement())
+  donorId           Int      @id @default(autoincrement())
   firstName         String
   lastName          String
-  bloodType         String
-  age               Int
-  gender            String
-  address           String
+  bloodType         String?
+  birthDate         DateTime?
+  gender            String?
+  address           String?
   latitude          Float?
   longitude         Float?
   donationFrequency String?
-  points            Int     @default(0)
+  points            Int      @default(0)
+  isEligible        Boolean  @default(true)
+  lastDonationDate  DateTime?
+  createdAt         DateTime @default(now())
+
+updatedAt DateTime @default(now()) @updatedAt
+
 
   userId Int  @unique
-  user   User @relation("UserDonor", fields: [userId], references: [userId])
+  user   User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  appointments    Appointment[]    @relation("DonorBooksAppointments")
-  donationRecords DonationRecord[] @relation("DonorMakesDonations")
+  appointments       Appointment[]
+  donationRecords    DonationRecord[]
+  medicalCheckups    MedicalCheckup[]
+  requestMatches     RequestMatch[]
+  rewardTransactions RewardTransaction[]
+  campaignRegistrations CampaignRegistration[]
 }
+
+
 
 model Patient {
   patientId Int      @id @default(autoincrement())
   firstName String
   lastName  String
-  bloodType String
-  address   String
+  bloodType String?
+  address   String?
   phone     String
-  birthDate DateTime
-  gender    String
+  birthDate DateTime?
+  gender    String?
+  createdAt DateTime @default(now())
 
-  userId Int  @unique
-  user   User @relation("UserPatient", fields: [userId], references: [userId])
+updatedAt DateTime @default(now()) @updatedAt
 
-  hospitalId Int
-  hospital   Hospital @relation("HospitalTreatsPatients", fields: [hospitalId], references: [hospitalId])
 
-  appointments      Appointment[]      @relation("PatientBooksAppointments")
-  emergencyRequests EmergencyRequest[] @relation("PatientCreatesRequests")
+  userId Int? @unique
+  user   User? @relation(fields: [userId], references: [userId], onDelete: SetNull)
+
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId])
+
+  appointments      Appointment[]
+  emergencyRequests EmergencyRequest[]
+  accessGrants      PatientAccess[] @relation("PatientAccessPatient")
+  assistanceEnquiries AssistanceEnquiry[]
 }
 
+
 model Hospital {
-  hospitalId  Int    @id @default(autoincrement())
+  hospitalId  Int      @id @default(autoincrement())
   name        String
   location    String
   contactInfo String
+  latitude    Float?
+  longitude   Float?
+  locationVerifiedAt DateTime?
+  locationVerifiedByStaffId Int?
+  locationVerifiedBy HospitalStaff? @relation("HospitalLocationVerifier", fields: [locationVerifiedByStaffId], references: [staffId], onDelete: SetNull)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
 
-  patients Patient[]       @relation("HospitalTreatsPatients")
-  staff    HospitalStaff[] @relation("HospitalEngagesStaff")
-  ngos     NGO[]           @relation("HospitalNGOCollaboration")
+updatedAt DateTime @default(now()) @updatedAt
+
+
+  patients       Patient[]
+  staff          HospitalStaff[]
+  ngos           NGO[]                 @relation("HospitalNGOCollaboration")
+  appointments   Appointment[]
+  donationRecords DonationRecord[]
+  inventories    BloodInventory[]
+  stockSettings  HospitalStockSettings?
+  medicalCheckups MedicalCheckup[]
+  campaigns      Campaign[]
+  emergencyRequests EmergencyRequest[]
+  assistanceEnquiries AssistanceEnquiry[]
+  donationNeeds HospitalDonationNeed[]
+  appointmentSlots AppointmentSlot[]
 }
 
 model NGO {
-  ngoId       Int    @id @default(autoincrement())
+  ngoId       Int      @id @default(autoincrement())
   name        String
   location    String
   contactInfo String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
 
-  users     NGOUser[]  @relation("NGOOwnsUsers")
+  users     NGOUser[]
   hospitals Hospital[] @relation("HospitalNGOCollaboration")
+  campaigns Campaign[]
+  outreachActivities OutreachActivity[]
 }
 
 model NGOUser {
   ngoUserId Int @id @default(autoincrement())
-
-  userId Int  @unique
-  user   User @relation("UserNGOUser", fields: [userId], references: [userId])
+  userId    Int @unique
+  user      User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   ngoId Int
-  ngo   NGO @relation("NGOOwnsUsers", fields: [ngoId], references: [ngoId])
+  ngo   NGO @relation(fields: [ngoId], references: [ngoId], onDelete: Cascade)
 
-  createdByAdminId Int
-  createdByAdmin   Admin @relation("AdminCreatesNGOUsers", fields: [createdByAdminId], references: [adminId])
+  createdByAdminId Int?
+  createdByAdmin   Admin? @relation("AdminCreatesNGOUsers", fields: [createdByAdminId], references: [adminId], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  createdCampaigns Campaign[] @relation("NGOUserCreatesCampaigns")
+  createdOutreachActivities OutreachActivity[] @relation("NGOUserCreatesOutreachActivities")
 }
 
 model HospitalStaff {
-  staffId Int @id @default(autoincrement())
+  staffId     Int      @id @default(autoincrement())
+  designation String
+  createdAt   DateTime @default(now())
 
   userId Int  @unique
-  user   User @relation("UserHospitalStaff", fields: [userId], references: [userId])
+  user   User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  hospitalId  Int
-  designation String
+  hospitalId Int
+  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Restrict)
 
-  hospital Hospital @relation("HospitalEngagesStaff", fields: [hospitalId], references: [hospitalId])
+  donationRecords DonationRecord[]
+  medicalCheckups MedicalCheckup[]
+  createdEmergencyRequests EmergencyRequest[] @relation("StaffCreatesEmergencyRequests")
+  reviewedAssistanceEnquiries AssistanceEnquiry[] @relation("StaffReviewsAssistanceEnquiries")
+  createdHospitalDonationNeeds HospitalDonationNeed[]
+  verifiedHospitalLocations Hospital[] @relation("HospitalLocationVerifier")
+  createdAppointmentSlots AppointmentSlot[]
+}
 
-  donationRecords DonationRecord[] @relation("StaffCreatesDonations")
+model AppointmentSlot {
+  slotId      Int      @id @default(autoincrement())
+  slotDate    DateTime @db.Date
+  time        String
+  capacity    Int
+  bookedCount Int      @default(0)
+  status      String   @default("OPEN")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  hospitalId Int
+  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Cascade)
+
+  createdByStaffId Int
+  createdByStaff   HospitalStaff @relation(fields: [createdByStaffId], references: [staffId], onDelete: Restrict)
+
+  appointments Appointment[]
+
+  @@unique([hospitalId, slotDate, time])
+  @@index([hospitalId, slotDate, status])
 }
 
 model Appointment {
@@ -126,45 +217,116 @@ model Appointment {
   date          DateTime
   time          String
   purpose       String
-  status        String
+  status        String   @default("SCHEDULED")
+  notes         String?
+  createdAt     DateTime @default(now())
+
+updatedAt DateTime @default(now()) @updatedAt
+
 
   donorId Int?
-  donor   Donor? @relation("DonorBooksAppointments", fields: [donorId], references: [donorId])
+  donor   Donor? @relation(fields: [donorId], references: [donorId], onDelete: SetNull)
 
   patientId Int?
-  patient   Patient? @relation("PatientBooksAppointments", fields: [patientId], references: [patientId])
+  patient   Patient? @relation(fields: [patientId], references: [patientId], onDelete: SetNull)
 
-  donationRecords DonationRecord[] @relation("AppointmentProducesDonations")
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
+
+  slotId Int?
+  slot   AppointmentSlot? @relation(fields: [slotId], references: [slotId], onDelete: SetNull)
+
+  donationRecords DonationRecord[]
 }
 
 model DonationRecord {
   donationId   Int      @id @default(autoincrement())
   donationDate DateTime
   bloodType    String
-  quantity     Int
-  status       String
+  quantity     Int      @default(1)
+  status       String   @default("RECORDED")
+  notes        String?
+  createdAt    DateTime @default(now())
 
   donorId Int
-  donor   Donor @relation("DonorMakesDonations", fields: [donorId], references: [donorId])
+  donor   Donor @relation(fields: [donorId], references: [donorId], onDelete: Restrict)
 
-  appointmentId Int
-  appointment   Appointment @relation("AppointmentProducesDonations", fields: [appointmentId], references: [appointmentId])
+  appointmentId Int?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [appointmentId], onDelete: SetNull)
 
-  staffId       Int
-  hospitalStaff HospitalStaff @relation("StaffCreatesDonations", fields: [staffId], references: [staffId])
+  staffId Int?
+  hospitalStaff HospitalStaff? @relation(fields: [staffId], references: [staffId], onDelete: SetNull)
 
-  rewardTransactions RewardTransaction[] @relation("DonationEarnsRewards")
-  emergencyRequests  EmergencyRequest[]  @relation("DonationFulfillsRequests")
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
+
+  rewardTransactions RewardTransaction[]
+  emergencyRequests  EmergencyRequest[] @relation("DonationFulfillsRequests")
 }
 
-model RewardTransaction {
-  rewardId     Int      @id @default(autoincrement())
-  pointsEarned Int
-  awardDate    DateTime
-  description  String
+model MedicalCheckup {
+  checkupId  Int      @id @default(autoincrement())
+  checkupDate DateTime @default(now())
+  hemoglobin Float?
+  bloodPressure String?
+  weight     Float?
+  result     String
+  notes      String?
+  createdAt  DateTime @default(now())
 
-  donationId Int
-  donation   DonationRecord @relation("DonationEarnsRewards", fields: [donationId], references: [donationId])
+  donorId Int
+  donor   Donor @relation(fields: [donorId], references: [donorId], onDelete: Cascade)
+
+  staffId Int?
+  hospitalStaff HospitalStaff? @relation(fields: [staffId], references: [staffId], onDelete: SetNull)
+
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
+}
+
+model BloodInventory {
+  inventoryId   Int      @id @default(autoincrement())
+  bloodType     String
+  unitsAvailable Int     @default(0)
+  minimumUnits  Int      @default(5)
+  updatedAt     DateTime @default(now()) @updatedAt
+  createdAt     DateTime @default(now())
+
+  hospitalId Int
+  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Cascade)
+
+  transactions InventoryTransaction[]
+
+  @@unique([hospitalId, bloodType])
+}
+
+model HospitalStockSettings {
+  settingsId                 Int      @id @default(autoincrement())
+  historicalWindowDays       Int      @default(30)
+  replenishmentLeadTimeDays   Int?
+  safetyBufferDays            Int?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @default(now()) @updatedAt
+
+  hospitalId Int      @unique
+  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Cascade)
+}
+
+model InventoryTransaction {
+  transactionId Int      @id @default(autoincrement())
+  transactionType String
+  unitsChanged  Int
+  reason        String?
+  createdAt     DateTime @default(now())
+
+  inventoryId Int
+  inventory   BloodInventory @relation(fields: [inventoryId], references: [inventoryId], onDelete: Cascade)
+
+  performedByUserId Int?
+  performedByUser   User? @relation("UserInventoryTransactions", fields: [performedByUserId], references: [userId], onDelete: SetNull)
+
+  requestId Int?
+  request   EmergencyRequest? @relation(fields: [requestId], references: [requestId], onDelete: SetNull)
 }
 
 model EmergencyRequest {
@@ -172,15 +334,139 @@ model EmergencyRequest {
   bloodType        String
   quantityRequired Int
   urgencyLevel     String
-  status           String
-  requestDate      DateTime
+  status           String   @default("PENDING")
+  latitude         Float?
+  longitude        Float?
+  currentWave      Int      @default(0)
+  lastAlertAt      DateTime?
+  requestDate      DateTime @default(now())
   neededBy         DateTime
+  notes            String?
+  fulfilledAt      DateTime?
+  fulfilledQuantity Int?
+  outcomeNotes     String?
+  createdAt        DateTime @default(now())
+
+updatedAt DateTime @default(now()) @updatedAt
+
+
+  patientId Int?
+  patient   Patient? @relation(fields: [patientId], references: [patientId], onDelete: SetNull)
+
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
+
+  requestedByUserId Int?
+  requestedByUser   User? @relation("UserCreatesEmergencyRequests", fields: [requestedByUserId], references: [userId], onDelete: SetNull)
+
+  createdByStaffId Int?
+  createdByStaff   HospitalStaff? @relation("StaffCreatesEmergencyRequests", fields: [createdByStaffId], references: [staffId], onDelete: SetNull)
+
+  donationRecords       DonationRecord[]       @relation("DonationFulfillsRequests")
+  matches               RequestMatch[]
+  alerts                Alert[]
+  notifications         Notification[]
+  inventoryTransactions InventoryTransaction[]
+  assistanceEnquiry AssistanceEnquiry? @relation("EnquiryCreatesRequest")
+
+  @@index([hospitalId, status, neededBy])
+}
+
+model PatientAccess {
+  accessId     Int      @id @default(autoincrement())
+  status       String   @default("PENDING")
+  relationship String
+  grantedAt    DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
 
   patientId Int
-  patient   Patient @relation("PatientCreatesRequests", fields: [patientId], references: [patientId])
+  patient   Patient @relation("PatientAccessPatient", fields: [patientId], references: [patientId], onDelete: Cascade)
 
-  donationRecords DonationRecord[] @relation("DonationFulfillsRequests")
-  alerts          Alert[]          @relation("RequestTriggersAlerts")
+  userId Int
+  user   User @relation("PatientAccessGrantee", fields: [userId], references: [userId], onDelete: Cascade)
+
+  grantedByUserId Int?
+  grantedByUser   User? @relation("PatientAccessGrantor", fields: [grantedByUserId], references: [userId], onDelete: SetNull)
+
+  @@unique([patientId, userId])
+  @@index([userId, status])
+}
+
+model AssistanceEnquiry {
+  enquiryId       Int      @id @default(autoincrement())
+  description     String
+  status          String   @default("PENDING_HOSPITAL_VERIFICATION")
+  submitterName   String?
+  submitterEmail  String?
+  submitterPhone  String?
+  requestedBloodType String?
+  quantityRequired Int?
+  urgencyLevel    String?
+  neededBy        DateTime?
+  latitude        Float?
+  longitude       Float?
+  reviewNotes     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  reviewedAt      DateTime?
+
+  submittingUserId Int?
+  submittingUser   User? @relation("UserSubmitsAssistanceEnquiries", fields: [submittingUserId], references: [userId], onDelete: SetNull)
+
+  patientId Int
+  patient   Patient @relation(fields: [patientId], references: [patientId], onDelete: Restrict)
+
+  preferredHospitalId Int?
+  preferredHospital   Hospital? @relation(fields: [preferredHospitalId], references: [hospitalId], onDelete: SetNull)
+
+  reviewedByStaffId Int?
+  reviewedByStaff   HospitalStaff? @relation("StaffReviewsAssistanceEnquiries", fields: [reviewedByStaffId], references: [staffId], onDelete: SetNull)
+
+  resultingRequestId Int? @unique
+  resultingRequest   EmergencyRequest? @relation("EnquiryCreatesRequest", fields: [resultingRequestId], references: [requestId], onDelete: SetNull)
+
+  @@index([status, preferredHospitalId, createdAt])
+}
+
+model HospitalDonationNeed {
+  needId          Int      @id @default(autoincrement())
+  bloodType       String
+  unitsNeeded     Int
+  neededBy        DateTime
+  notes           String?
+  status          String   @default("OPEN")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  hospitalId Int
+  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Cascade)
+
+  createdByStaffId Int
+  createdByStaff   HospitalStaff @relation(fields: [createdByStaffId], references: [staffId], onDelete: Restrict)
+
+  campaigns Campaign[]
+
+  @@index([hospitalId, status, neededBy])
+}
+
+model RequestMatch {
+  matchId     Int      @id @default(autoincrement())
+  status      String   @default("MATCHED")
+  wave        Int      @default(1)
+  distanceKm  Float?
+  notifiedAt  DateTime?
+  responseAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  requestId Int
+  request   EmergencyRequest @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+
+  donorId Int
+  donor   Donor @relation(fields: [donorId], references: [donorId], onDelete: Cascade)
+
+  @@unique([requestId, donorId])
 }
 
 model Alert {
@@ -188,10 +474,65 @@ model Alert {
   alertType String
   channel   String
   message   String
-  sentAt    DateTime
+  status    String   @default("PENDING")
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
 
-  requestId        Int
-  emergencyRequest EmergencyRequest @relation("RequestTriggersAlerts", fields: [requestId], references: [requestId])
+  requestId Int?
+  emergencyRequest EmergencyRequest? @relation(fields: [requestId], references: [requestId], onDelete: SetNull)
+
+  userId Int?
+  user   User? @relation("UserReceivesAlerts", fields: [userId], references: [userId], onDelete: SetNull)
+}
+
+model Notification {
+  notificationId Int      @id @default(autoincrement())
+  type           String
+  channel        String
+  title          String?
+  message        String
+  status         String   @default("PENDING")
+  sentAt         DateTime?
+  readAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  userId Int?
+  user   User? @relation(fields: [userId], references: [userId], onDelete: SetNull)
+
+  requestId Int?
+  request   EmergencyRequest? @relation(fields: [requestId], references: [requestId], onDelete: SetNull)
+
+  campaignId Int?
+  campaign   Campaign? @relation(fields: [campaignId], references: [campaignId], onDelete: SetNull)
+}
+
+model PasswordResetToken {
+  tokenId   Int      @id @default(autoincrement())
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model EmailOutbox {
+  emailId        Int      @id @default(autoincrement())
+  recipientEmail String
+  template       String
+  payload        Json
+  status         String   @default("QUEUED")
+  attempts       Int      @default(0)
+  nextAttemptAt  DateTime @default(now())
+  lastError      String?
+  createdAt      DateTime @default(now())
+  sentAt         DateTime?
+  processingAt   DateTime?
+
+  @@index([status, nextAttemptAt])
 }
 
 model Campaign {
@@ -201,8 +542,89 @@ model Campaign {
   startDate   DateTime
   endDate     DateTime
   location    String
-  status      String
+  status      String   @default("PLANNED")
+  createdAt   DateTime @default(now())
 
-  createdByAdminId Int
-  createdByAdmin   Admin @relation("AdminCreatesCampaigns", fields: [createdByAdminId], references: [adminId])
+  createdByAdminId Int?
+  createdByAdmin   Admin? @relation(fields: [createdByAdminId], references: [adminId], onDelete: Restrict)
+
+  createdByNgoUserId Int?
+  createdByNgoUser   NGOUser? @relation("NGOUserCreatesCampaigns", fields: [createdByNgoUserId], references: [ngoUserId], onDelete: SetNull)
+
+  ngoId Int?
+  ngo   NGO? @relation(fields: [ngoId], references: [ngoId], onDelete: SetNull)
+
+  hospitalId Int?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
+
+  hospitalNeedId Int?
+  hospitalNeed   HospitalDonationNeed? @relation(fields: [hospitalNeedId], references: [needId], onDelete: SetNull)
+
+  donorRegistrations CampaignRegistration[]
+  outreachActivities OutreachActivity[]
+  notifications      Notification[]
+}
+
+model OutreachActivity {
+  activityId   Int      @id @default(autoincrement())
+  title        String
+  activityType String
+  description  String
+  location     String
+  scheduledAt  DateTime
+  status       String   @default("PLANNED")
+  peopleReached Int     @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  ngoId Int
+  ngo   NGO @relation(fields: [ngoId], references: [ngoId], onDelete: Cascade)
+
+  campaignId Int?
+  campaign   Campaign? @relation(fields: [campaignId], references: [campaignId], onDelete: SetNull)
+
+  createdByNgoUserId Int?
+  createdByNgoUser   NGOUser? @relation("NGOUserCreatesOutreachActivities", fields: [createdByNgoUserId], references: [ngoUserId], onDelete: SetNull)
+
+  @@index([ngoId, scheduledAt])
+}
+
+model CampaignRegistration {
+  registrationId Int      @id @default(autoincrement())
+  status         String   @default("REGISTERED")
+  registeredAt   DateTime @default(now())
+
+  donorId Int
+  donor   Donor @relation(fields: [donorId], references: [donorId], onDelete: Cascade)
+
+  campaignId Int
+  campaign   Campaign @relation(fields: [campaignId], references: [campaignId], onDelete: Cascade)
+
+  @@unique([campaignId, donorId])
+}
+
+model RewardTransaction {
+  rewardId     Int      @id @default(autoincrement())
+  pointsEarned Int
+  awardDate    DateTime @default(now())
+  description  String
+
+  donorId Int?
+  donor   Donor? @relation(fields: [donorId], references: [donorId], onDelete: SetNull)
+
+  donationId Int
+  donation   DonationRecord @relation(fields: [donationId], references: [donationId], onDelete: Cascade)
+}
+
+model AuditLog {
+  auditLogId Int      @id @default(autoincrement())
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  actorUserId Int?
+  actorUser   User? @relation("UserAuditLogs", fields: [actorUserId], references: [userId], onDelete: SetNull)
 }
