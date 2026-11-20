@@ -1,6 +1,7 @@
 const { PrismaClient } = require("../generated/prisma");
 const { PrismaPg } = require("@prisma/adapter-pg");
 const bcrypt = require("bcryptjs");
+const { generateBirthDateForAge } = require("./seedUtils");
 
 require("dotenv").config();
 
@@ -74,6 +75,8 @@ async function main() {
         name: "Kenyatta National Hospital",
         location: "Hospital Road, Nairobi",
         contactInfo: "0202726300",
+        latitude: -1.3008309,
+        longitude: 36.8072359,
       },
     }),
 
@@ -82,6 +85,8 @@ async function main() {
         name: "Mama Lucy Kibaki Hospital",
         location: "Donholm, Nairobi",
         contactInfo: "0208000000",
+        latitude: -1.2745532,
+        longitude: 36.8992464,
       },
     }),
 
@@ -90,6 +95,8 @@ async function main() {
         name: "Mbagathi Hospital",
         location: "Mbagathi Road, Nairobi",
         contactInfo: "0202729800",
+        latitude: -1.3090430,
+        longitude: 36.8033053,
       },
     }),
 
@@ -98,6 +105,8 @@ async function main() {
         name: "Aga Khan University Hospital",
         location: "3rd Parklands Avenue, Nairobi",
         contactInfo: "0203662020",
+        latitude: -1.2617938,
+        longitude: 36.8238411,
       },
     }),
 
@@ -106,6 +115,8 @@ async function main() {
         name: "MP Shah Hospital",
         location: "Shivachi Road, Parklands, Nairobi",
         contactInfo: "0204291000",
+        latitude: -1.2635968,
+        longitude: 36.8120936,
       },
     }),
   ]);
@@ -258,6 +269,7 @@ async function main() {
     ["Anne", "Wambui", "B-", "0711000008", "Female"],
     ["Michael", "Ochieng", "O+", "0711000009", "Male"],
     ["Catherine", "Nyambura", "A+", "0711000010", "Female"],
+    ["Onyx", "Courtney", "A+", "0745273570", "Male"],
   ];
 
   const patients = [];
@@ -375,7 +387,7 @@ async function main() {
         firstName,
         lastName,
         bloodType,
-        age,
+        birthDate: generateBirthDateForAge(age),
         gender,
         address: `${area}, Nairobi`,
         latitude,
@@ -444,6 +456,46 @@ async function main() {
   }
 
   console.log(`✓ ${donationRecords.length} donation records created`);
+
+  const inventoryByHospitalAndBloodType = new Map();
+
+  for (let i = 0; i < donationRecords.length; i++) {
+    const donation = donationRecords[i];
+    const hospitalId = hospitalStaff[i % hospitalStaff.length].hospitalId;
+    const key = `${hospitalId}:${donation.bloodType}`;
+    const current = inventoryByHospitalAndBloodType.get(key);
+
+    if (current) {
+      current.unitsAvailable += donation.quantity;
+      if (donation.createdAt > current.updatedAt) {
+        current.updatedAt = donation.createdAt;
+      }
+    } else {
+      inventoryByHospitalAndBloodType.set(key, {
+        hospitalId,
+        bloodType: donation.bloodType,
+        unitsAvailable: donation.quantity,
+        updatedAt: donation.createdAt,
+      });
+    }
+  }
+
+  for (const stock of inventoryByHospitalAndBloodType.values()) {
+    await prisma.bloodInventory.create({
+      data: {
+        ...stock,
+        transactions: {
+          create: {
+            transactionType: "INITIAL_STOCK_SYNC",
+            unitsChanged: stock.unitsAvailable,
+            reason: "Seeded from available donation records",
+          },
+        },
+      },
+    });
+  }
+
+  console.log(`✓ ${inventoryByHospitalAndBloodType.size} blood inventory records created`);
 
   // ---------------------------------------------------------
   // 12. REWARD TRANSACTIONS
