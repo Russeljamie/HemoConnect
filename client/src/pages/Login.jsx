@@ -10,7 +10,11 @@ import {
   HeartPulse,
 } from "lucide-react";
 
-import { authAPI, saveAuthData } from "../services/api";
+import {
+  authAPI,
+  getDashboardPath,
+  saveAuthData,
+} from "../services/api";
 import "../styles/auth.css";
 
 function Login() {
@@ -58,12 +62,16 @@ function Login() {
 
       saveAuthData(response);
 
-      navigate("/dashboard");
+      const targetPath = response?.data?.user?.mustChangePassword
+        ? "/change-password"
+        : getDashboardPath(response?.data?.user?.role);
+      navigate(targetPath, { replace: true });
     } catch (err) {
-      const message =
-        err.response?.data?.message ||
-        err.response?.data?.error ||
-        "Login failed. Please check your email and password.";
+      const message = err.response
+        ? err.response.data?.message ||
+          err.response.data?.error ||
+          "Login failed. Please check your email and password."
+        : "Unable to reach the HemoConnect server. Check your connection and try again.";
 
       setError(message);
     } finally {
@@ -166,17 +174,9 @@ function Login() {
               <div className="password-label-row">
                 <label htmlFor="password">Password</label>
 
-                <button
-                  type="button"
-                  className="forgot-password"
-                  onClick={() =>
-                    setError(
-                      "Password recovery will be available soon."
-                    )
-                  }
-                >
+                <Link to="/forgot-password" className="forgot-password">
                   Forgot password?
-                </button>
+                </Link>
               </div>
 
               <div className="input-wrapper">
@@ -237,6 +237,11 @@ function Login() {
           <p className="auth-register-text">
             Don't have an account?{" "}
             <Link to="/register">Create an account</Link>
+          </p>
+
+          <p className="auth-register-text">
+            Need help with a blood request?{" "}
+            <Link to="/assistance">Contact a hospital</Link>
           </p>
 
           <p className="auth-footer">

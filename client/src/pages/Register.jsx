@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -8,11 +9,13 @@ import {
   HeartPulse,
   LockKeyhole,
   Mail,
+  MapPin,
   Phone,
   UserRound,
 } from "lucide-react";
 
-import { authAPI, saveAuthData } from "../services/api";
+import { authAPI } from "../services/api";
+import { ageFromDateOfBirth, dateInputYearsAgo } from "../utils/dateOfBirth";
 import "../styles/auth.css";
 
 function Register() {
@@ -26,12 +29,14 @@ function Register() {
     password: "",
     confirmPassword: "",
     role: "DONOR",
+    bloodType: "",
+    birthDate: "",
+    gender: "",
+    address: "",
   });
 
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false);
-
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -44,13 +49,8 @@ function Register() {
       [name]: value,
     }));
 
-    if (error) {
-      setError("");
-    }
-
-    if (success) {
-      setSuccess("");
-    }
+    if (error) setError("");
+    if (success) setSuccess("");
   };
 
   const validateForm = () => {
@@ -69,8 +69,29 @@ function Register() {
       return "Password must be at least 8 characters long.";
     }
 
+    if (formData.password.length > 128) {
+      return "Password cannot exceed 128 characters.";
+    }
+
     if (formData.password !== formData.confirmPassword) {
       return "Passwords do not match.";
+    }
+
+    if (formData.role === "DONOR") {
+      if (
+        !formData.bloodType ||
+        !formData.birthDate ||
+        !formData.gender ||
+        !formData.address.trim()
+      ) {
+        return "Please complete all required donor details.";
+      }
+
+      const age = ageFromDateOfBirth(formData.birthDate);
+
+      if (age === null || age < 18 || age > 100) {
+        return "Donor date of birth must represent an age between 18 and 100.";
+      }
     }
 
     return "";
@@ -78,7 +99,6 @@ function Register() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-
     setError("");
     setSuccess("");
 
@@ -99,18 +119,24 @@ function Register() {
         phone: formData.phone.trim(),
         password: formData.password,
         role: formData.role,
+        ...(formData.role === "DONOR" && {
+          bloodType: formData.bloodType,
+          birthDate: formData.birthDate,
+          gender: formData.gender,
+          address: formData.address.trim(),
+        }),
       };
 
       const response = await authAPI.register(registrationData);
 
-      /*
-       * If the backend returns authentication data immediately,
-       * save it. Otherwise the user will simply be redirected
-       * to the login page.
-       */
       if (response?.data?.token) {
-        saveAuthData(response);
+        setSuccess("Registration successful! Redirecting...");
         navigate("/dashboard");
+        return;
+      }
+
+      if (response?.data?.success === false) {
+        setError(response.data.message || "Registration failed.");
         return;
       }
 
@@ -122,27 +148,21 @@ function Register() {
         navigate("/login");
       }, 1200);
     } catch (err) {
-      const backendMessage =
-        err.response?.data?.message ||
-        err.response?.data?.error;
+      const responseData = err.response?.data;
 
-      if (Array.isArray(err.response?.data?.errors)) {
-        const validationMessages = err.response.data.errors
-          .map((item) => item.message)
-          .filter(Boolean)
-          .join(" ");
+      const validationMessages = Array.isArray(responseData?.errors)
+        ? responseData.errors
+            .map((item) => item.msg || item.message)
+            .filter(Boolean)
+            .join(" ")
+        : "";
 
-        setError(
-          validationMessages ||
-            backendMessage ||
-            "Registration failed. Please check your details."
-        );
-      } else {
-        setError(
-          backendMessage ||
-            "Registration failed. Please check your details and try again."
-        );
-      }
+      setError(
+        validationMessages ||
+          responseData?.message ||
+          responseData?.error ||
+          "Registration failed. Please check your details and try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -150,7 +170,6 @@ function Register() {
 
   return (
     <div className="auth-page">
-      {/* Left branding panel */}
       <section className="auth-brand-panel">
         <div className="auth-brand-content">
           <div className="auth-logo">
@@ -160,7 +179,7 @@ function Register() {
           <h1>HemoConnect</h1>
 
           <p className="auth-brand-subtitle">
-            Blood Donation & Management System
+            Blood Donation &amp; Management System
           </p>
 
           <div className="auth-message">
@@ -194,10 +213,8 @@ function Register() {
         </div>
       </section>
 
-      {/* Registration panel */}
       <section className="auth-form-panel">
         <div className="auth-form-container register-container">
-          {/* Mobile branding */}
           <div className="mobile-auth-logo">
             <div className="auth-logo">
               <Droplet size={25} fill="currentColor" />
@@ -228,7 +245,6 @@ function Register() {
           )}
 
           <form onSubmit={handleSubmit} className="auth-form">
-            {/* First and last name */}
             <div className="form-row">
               <div className="form-group">
                 <label htmlFor="firstName">First Name</label>
@@ -244,7 +260,10 @@ function Register() {
                     value={formData.firstName}
                     onChange={handleChange}
                     autoComplete="given-name"
+                    minLength={2}
+                    maxLength={50}
                     disabled={loading}
+                    required
                   />
                 </div>
               </div>
@@ -263,13 +282,15 @@ function Register() {
                     value={formData.lastName}
                     onChange={handleChange}
                     autoComplete="family-name"
+                    minLength={2}
+                    maxLength={50}
                     disabled={loading}
+                    required
                   />
                 </div>
               </div>
             </div>
 
-            {/* Email */}
             <div className="form-group">
               <label htmlFor="email">Email Address</label>
 
@@ -285,11 +306,11 @@ function Register() {
                   onChange={handleChange}
                   autoComplete="email"
                   disabled={loading}
+                  required
                 />
               </div>
             </div>
 
-            {/* Phone */}
             <div className="form-group">
               <label htmlFor="phone">Phone Number</label>
 
@@ -304,21 +325,21 @@ function Register() {
                   value={formData.phone}
                   onChange={handleChange}
                   autoComplete="tel"
+                  minLength={10}
+                  maxLength={20}
                   disabled={loading}
+                  required
                 />
               </div>
             </div>
 
-            {/* Role */}
             <div className="form-group">
-              <label htmlFor="role">Account Type</label>
+              <label>Account Type</label>
 
               <div className="role-options">
                 <label
                   className={`role-option ${
-                    formData.role === "DONOR"
-                      ? "selected"
-                      : ""
+                    formData.role === "DONOR" ? "selected" : ""
                   }`}
                 >
                   <input
@@ -333,17 +354,14 @@ function Register() {
                   <div>
                     <strong>Donor</strong>
                     <span>
-                      Donate blood and respond to emergency
-                      requests.
+                      Donate blood and respond to emergency requests.
                     </span>
                   </div>
                 </label>
 
                 <label
                   className={`role-option ${
-                    formData.role === "PATIENT"
-                      ? "selected"
-                      : ""
+                    formData.role === "PATIENT" ? "selected" : ""
                   }`}
                 >
                   <input
@@ -358,15 +376,110 @@ function Register() {
                   <div>
                     <strong>Patient</strong>
                     <span>
-                      Request blood and manage your blood
-                      requirements.
+                      Request blood and manage your blood requirements.
                     </span>
                   </div>
                 </label>
               </div>
             </div>
 
-            {/* Password */}
+            {formData.role === "DONOR" && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="bloodType">Blood Type</label>
+
+                  <select
+                    id="bloodType"
+                    name="bloodType"
+                    value={formData.bloodType}
+                    onChange={handleChange}
+                    disabled={loading}
+                    required
+                  >
+                    <option value="">Select blood type</option>
+
+                    {[
+                      "A+",
+                      "A-",
+                      "B+",
+                      "B-",
+                      "AB+",
+                      "AB-",
+                      "O+",
+                      "O-",
+                    ].map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="birthDate">Date of birth</label>
+
+                    <input
+                      id="birthDate"
+                      name="birthDate"
+                      type="date"
+                      min={dateInputYearsAgo(100)}
+                      max={dateInputYearsAgo(18)}
+                      value={formData.birthDate}
+                      onChange={handleChange}
+                      disabled={loading}
+                      required
+                    />
+                    {formData.birthDate && ageFromDateOfBirth(formData.birthDate) !== null && (
+                      <small>Age: {ageFromDateOfBirth(formData.birthDate)} (calculated)</small>
+                    )}
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="gender">Gender</label>
+
+                    <select
+                      id="gender"
+                      name="gender"
+                      value={formData.gender}
+                      onChange={handleChange}
+                      disabled={loading}
+                      required
+                    >
+                      <option value="">Select gender</option>
+                      <option value="MALE">Male</option>
+                      <option value="FEMALE">Female</option>
+                      <option value="OTHER">Other</option>
+                      <option value="PREFER_NOT_TO_SAY">
+                        Prefer not to say
+                      </option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="address">Location / Address</label>
+
+                  <div className="input-wrapper">
+                    <MapPin size={18} />
+
+                    <input
+                      id="address"
+                      name="address"
+                      type="text"
+                      value={formData.address}
+                      onChange={handleChange}
+                      placeholder="e.g. Westlands, Nairobi"
+                      maxLength={255}
+                      autoComplete="street-address"
+                      disabled={loading}
+                      required
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
             <div className="form-group">
               <label htmlFor="password">Password</label>
 
@@ -381,21 +494,20 @@ function Register() {
                   value={formData.password}
                   onChange={handleChange}
                   autoComplete="new-password"
+                  minLength={8}
+                  maxLength={128}
                   disabled={loading}
+                  required
                 />
 
                 <button
                   type="button"
                   className="password-toggle"
                   onClick={() =>
-                    setShowPassword(
-                      (previous) => !previous
-                    )
+                    setShowPassword((previous) => !previous)
                   }
                   aria-label={
-                    showPassword
-                      ? "Hide password"
-                      : "Show password"
+                    showPassword ? "Hide password" : "Show password"
                   }
                 >
                   {showPassword ? (
@@ -407,7 +519,6 @@ function Register() {
               </div>
             </div>
 
-            {/* Confirm password */}
             <div className="form-group">
               <label htmlFor="confirmPassword">
                 Confirm Password
@@ -419,25 +530,20 @@ function Register() {
                 <input
                   id="confirmPassword"
                   name="confirmPassword"
-                  type={
-                    showConfirmPassword
-                      ? "text"
-                      : "password"
-                  }
+                  type={showConfirmPassword ? "text" : "password"}
                   placeholder="Confirm your password"
                   value={formData.confirmPassword}
                   onChange={handleChange}
                   autoComplete="new-password"
                   disabled={loading}
+                  required
                 />
 
                 <button
                   type="button"
                   className="password-toggle"
                   onClick={() =>
-                    setShowConfirmPassword(
-                      (previous) => !previous
-                    )
+                    setShowConfirmPassword((previous) => !previous)
                   }
                   aria-label={
                     showConfirmPassword
@@ -454,7 +560,6 @@ function Register() {
               </div>
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               className="auth-submit-button"
@@ -481,7 +586,7 @@ function Register() {
           </p>
 
           <p className="auth-footer">
-            © 2026 HemoConnect. Blood donation saves lives.
+            &copy; 2026 HemoConnect. Blood donation saves lives.
           </p>
         </div>
       </section>

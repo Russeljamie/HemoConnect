@@ -140,6 +140,10 @@
   overflow-y: auto;
 }
 
+.auth-standalone-panel {
+  grid-column: 1 / -1;
+}
+
 .auth-form-container {
   width: 100%;
   max-width: 440px;
@@ -237,6 +241,11 @@
   color: #e9253f;
   font-size: 10px;
   cursor: pointer;
+  text-decoration: none;
+}
+
+.forgot-password:hover {
+  text-decoration: underline;
 }
 
 .input-wrapper {
