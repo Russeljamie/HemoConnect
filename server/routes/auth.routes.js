@@ -1,5 +1,6 @@
 ﻿const express = require("express");
 const { body } = require("express-validator");
+const rateLimit = require("express-rate-limit");
 
 const {
   register,
@@ -23,10 +24,21 @@ const authenticate = require("../middleware/authenticate");
 const authorize = require("../middleware/authorize");
 
 const router = express.Router();
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many authentication attempts. Please try again later.",
+  },
+});
 
 // Public registration
 router.post(
   "/register",
+  authRateLimiter,
   registrationValidation,
   validate,
   register
@@ -35,6 +47,7 @@ router.post(
 // Public login
 router.post(
   "/login",
+  authRateLimiter,
   loginValidation,
   validate,
   login
@@ -42,6 +55,7 @@ router.post(
 
 router.post(
   "/password-reset/request",
+  authRateLimiter,
   body("email").trim().isEmail().withMessage("Enter a valid email address.").normalizeEmail(),
   validate,
   requestPasswordReset
@@ -49,6 +63,7 @@ router.post(
 
 router.post(
   "/password-reset/confirm",
+  authRateLimiter,
   body("token").isString().isLength({ min: 32, max: 100 }).withMessage("Password reset token is invalid."),
   body("newPassword").isString().isLength({ min: 12, max: 128 }).withMessage("New password must be between 12 and 128 characters."),
   validate,

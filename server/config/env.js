@@ -1,6 +1,19 @@
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
+const DEVELOPMENT_JWT_SECRET = "HemoConnect-Development-Only-JWT-Secret-Do-Not-Use-In-Production";
+const nodeEnv = process.env.NODE_ENV || "development";
+let jwtSecret = process.env.JWT_SECRET;
+
+if (nodeEnv === "production") {
+  if (!jwtSecret || jwtSecret.length < 32) {
+    throw new Error("JWT_SECRET must be set to at least 32 characters in production.");
+  }
+} else if (!jwtSecret) {
+  jwtSecret = DEVELOPMENT_JWT_SECRET;
+  console.warn("JWT_SECRET is not set; using the development-only default. Do not use this secret in production.");
+}
+
 const alertWaveRadiiKm = [
   Number(process.env.ALERT_WAVE_1_RADIUS_KM) || 5,
   Number(process.env.ALERT_WAVE_2_RADIUS_KM) || 15,
@@ -9,9 +22,9 @@ const alertWaveRadiiKm = [
 
 const env = {
   PORT: Number(process.env.PORT) || 5000,
-  NODE_ENV: process.env.NODE_ENV || "development",
+  NODE_ENV: nodeEnv,
   DATABASE_URL: process.env.DATABASE_URL || "",
-  JWT_SECRET: process.env.JWT_SECRET || "development_secret",
+  JWT_SECRET: jwtSecret,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
   CLIENT_URL: process.env.CLIENT_URL || "http://localhost:3000",
   ALERT_WAVE_RADII_KM: alertWaveRadiiKm,

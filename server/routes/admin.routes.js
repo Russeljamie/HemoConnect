@@ -1,5 +1,5 @@
 const express = require("express");
-const { body } = require("express-validator");
+const { body, param } = require("express-validator");
 
 const {
 	getAdminDashboard,
@@ -23,6 +23,9 @@ router.patch(
 	"/users/:userId/status",
 	authenticate,
 	authorize("ADMIN"),
+	param("userId").isInt({ min: 1 }).withMessage("Invalid user ID.").toInt(),
+	body("status").isIn(["ACTIVE", "INACTIVE"]).withMessage("Status must be ACTIVE or INACTIVE."),
+	validate,
 	updateAdminUserStatus
 );
 router.post(
@@ -56,6 +59,9 @@ router.patch(
 	"/hospitals/:hospitalId/status",
 	authenticate,
 	authorize("ADMIN"),
+	param("hospitalId").isInt({ min: 1 }).withMessage("Invalid hospital ID.").toInt(),
+	body("status").isIn(["ACTIVE", "INACTIVE"]).withMessage("Status must be ACTIVE or INACTIVE."),
+	validate,
 	updateAdminHospitalStatus
 );
 router.get("/inventory", authenticate, authorize("ADMIN"), listAdminInventory);

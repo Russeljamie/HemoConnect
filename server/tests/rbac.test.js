@@ -251,4 +251,27 @@ describe("Role-based access control", () => {
     expect(response.status).toBe(403);
     expect(response.body.success).toBe(false);
   });
+
+  it("validates IDs and status values on administrator status-change routes", async () => {
+    const responses = await Promise.all([
+      request(app)
+        .patch("/api/admin/users/invalid/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "ACTIVE" }),
+      request(app)
+        .patch("/api/admin/users/1/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "SUSPENDED" }),
+      request(app)
+        .patch("/api/admin/hospitals/invalid/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "ACTIVE" }),
+      request(app)
+        .patch("/api/admin/hospitals/1/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "SUSPENDED" }),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([400, 400, 400, 400]);
+  });
 });

@@ -1,7 +1,8 @@
 ﻿const jwt = require("jsonwebtoken");
 const env = require("../config/env");
+const prisma = require("../services/prisma");
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const authorization = req.headers.authorization;
 
   if (!authorization || !authorization.startsWith("Bearer ")) {
@@ -20,8 +21,9 @@ const authenticate = (req, res, next) => {
     });
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET);
+    decoded = jwt.verify(token, env.JWT_SECRET);
 
     if (
       !decoded ||
@@ -33,14 +35,6 @@ const authenticate = (req, res, next) => {
         message: "Invalid authentication token.",
       });
     }
-
-    req.user = {
-      userId: decoded.userId,
-      role: decoded.role,
-      mustChangePassword: decoded.mustChangePassword === true,
-    };
-
-    next();
   } catch (error) {
     if (
       error.name === "TokenExpiredError" ||
@@ -53,7 +47,38 @@ const authenticate = (req, res, next) => {
       });
     }
 
-    next(error);
+    return next(error);
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { userId: decoded.userId },
+      select: { role: true, status: true, mustChangePassword: true },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "The account for this authentication token no longer exists.",
+      });
+    }
+
+    if (user.status !== "ACTIVE") {
+      return res.status(403).json({
+        success: false,
+        message: "This account is deactivated.",
+      });
+    }
+
+    req.user = {
+      userId: decoded.userId,
+      role: user.role,
+      mustChangePassword: user.mustChangePassword,
+    };
+
+    return next();
+  } catch (error) {
+    return next(error);
   }
 };
 
