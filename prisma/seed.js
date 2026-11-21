@@ -19,7 +19,6 @@ async function main() {
   // ---------------------------------------------------------
 
   await prisma.alert.deleteMany();
-  await prisma.rewardTransaction.deleteMany();
   await prisma.donationRecord.deleteMany();
   await prisma.emergencyRequest.deleteMany();
   await prisma.appointment.deleteMany();
@@ -398,7 +397,6 @@ async function main() {
             : i % 3 === 1
             ? "Occasional"
             : "First-time",
-        points: (i % 6) * 20,
         userId: donorUser.userId,
       },
     });
@@ -496,23 +494,6 @@ async function main() {
   }
 
   console.log(`✓ ${inventoryByHospitalAndBloodType.size} blood inventory records created`);
-
-  // ---------------------------------------------------------
-  // 12. REWARD TRANSACTIONS
-  // ---------------------------------------------------------
-
-  for (let i = 0; i < donationRecords.length; i++) {
-    await prisma.rewardTransaction.create({
-      data: {
-        pointsEarned: 20,
-        awardDate: donationRecords[i].donationDate,
-        description: "Blood donation reward",
-        donationId: donationRecords[i].donationId,
-      },
-    });
-  }
-
-  console.log("✓ Reward transactions created");
 
   // ---------------------------------------------------------
   // 13. EMERGENCY REQUESTS
@@ -663,7 +644,6 @@ async function main() {
   console.log(`Donors:                ${donors.length}`);
   console.log(`Appointments:          ${appointments.length}`);
   console.log(`Donation Records:      ${donationRecords.length}`);
-  console.log(`Reward Transactions:   ${donationRecords.length}`);
   console.log(`Emergency Requests:    ${emergencyRequests.length}`);
   console.log(`Alerts:                ${emergencyRequests.length}`);
   console.log(`Campaigns:             ${campaigns.length}`);

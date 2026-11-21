@@ -77,13 +77,9 @@ const getDonorProfile = async (req, res, next) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [totalDonations, rewardSummary, appointmentRecords, activeCampaigns, latestSuccessfulDonation] =
+    const [totalDonations, appointmentRecords, activeCampaigns, latestSuccessfulDonation] =
       await Promise.all([
         prisma.donationRecord.count({ where: { donorId: user.donor.donorId } }),
-        prisma.rewardTransaction.aggregate({
-          where: { donation: { donorId: user.donor.donorId } },
-          _sum: { pointsEarned: true },
-        }),
         prisma.appointment.findMany({
           where: {
             donorId: user.donor.donorId,
@@ -165,7 +161,6 @@ const getDonorProfile = async (req, res, next) => {
           address: user.donor.address,
           latitude: user.donor.latitude,
           longitude: user.donor.longitude,
-          points: user.donor.points,
           eligibility: user.donor.isEligible,
           lastDonationDate: user.donor.lastDonationDate,
           lastSuccessfulDonationDate: donationEligibility.lastSuccessfulDonationDate,
@@ -174,7 +169,6 @@ const getDonorProfile = async (req, res, next) => {
         },
         metrics: {
           totalDonations,
-          rewardPoints: rewardSummary._sum.pointsEarned ?? user.donor.points ?? 0,
           nextAppointment,
           activeCampaigns,
         },
@@ -283,7 +277,6 @@ const listDonorDonations = async (req, res, next) => {
         include: {
           hospital: { select: { name: true } },
           hospitalStaff: { include: { hospital: { select: { name: true } } } },
-          rewardTransactions: { select: { pointsEarned: true } },
         },
         orderBy: [{ donationDate: "desc" }, { donationId: "desc" }],
         skip: (page - 1) * pageSize,
@@ -302,7 +295,6 @@ const listDonorDonations = async (req, res, next) => {
           status: donation.status,
           notes: donation.notes,
           hospital: donation.hospital?.name || donation.hospitalStaff?.hospital?.name || null,
-          rewardPoints: donation.rewardTransactions.reduce((sum, reward) => sum + reward.pointsEarned, 0),
         })),
         pagination: { total, page, pageSize, totalPages: Math.ceil(total / pageSize) },
       },
@@ -329,7 +321,6 @@ const getDonorDonation = async (req, res, next) => {
       include: {
         hospital: { select: { name: true, location: true } },
         hospitalStaff: { include: { hospital: { select: { name: true, location: true } } } },
-        rewardTransactions: true,
       },
     });
 
@@ -350,7 +341,6 @@ const getDonorDonation = async (req, res, next) => {
           notes: donation.notes,
           hospital: hospital?.name || null,
           hospitalLocation: hospital?.location || null,
-          rewardPoints: donation.rewardTransactions.reduce((sum, reward) => sum + reward.pointsEarned, 0),
         },
       },
     });

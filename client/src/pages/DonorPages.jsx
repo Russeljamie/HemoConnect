@@ -219,7 +219,7 @@ export function DonorDonationsPage() {
 
   return (
     <section className="donor-page-panel" aria-labelledby="donor-donations-heading">
-      <header className="donor-page-heading"><div><h1 id="donor-donations-heading">Donation history</h1><p>Your recorded donations and rewards.</p></div><span>{pagination.total} records</span></header>
+      <header className="donor-page-heading"><div><h1 id="donor-donations-heading">Donation history</h1><p>Your recorded donations.</p></div><span>{pagination.total} records</span></header>
       <PageMessage error={error} />
       <div className="donor-table-wrap">
         <table className="donor-table">
@@ -249,7 +249,7 @@ export function DonorDonationsPage() {
         <div className="donor-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDonation(null); }}>
           <section className="donor-modal" role="dialog" aria-modal="true" aria-labelledby="donation-detail-heading">
             <header><h2 id="donation-detail-heading">Donation details</h2><button type="button" aria-label="Close donation details" onClick={() => setSelectedDonation(null)}><X size={19} /></button></header>
-            <dl><dt>Date</dt><dd>{formatDate(selectedDonation.donationDate)}</dd><dt>Blood type</dt><dd>{selectedDonation.bloodType}</dd><dt>Quantity</dt><dd>{selectedDonation.quantity} ml</dd><dt>Status</dt><dd>{selectedDonation.status}</dd><dt>Hospital</dt><dd>{selectedDonation.hospital || "Not recorded"}</dd><dt>Reward points</dt><dd>{selectedDonation.rewardPoints}</dd><dt>Notes</dt><dd>{selectedDonation.notes || "No notes"}</dd></dl>
+            <dl><dt>Date</dt><dd>{formatDate(selectedDonation.donationDate)}</dd><dt>Blood type</dt><dd>{selectedDonation.bloodType}</dd><dt>Quantity</dt><dd>{selectedDonation.quantity} ml</dd><dt>Status</dt><dd>{selectedDonation.status}</dd><dt>Hospital</dt><dd>{selectedDonation.hospital || "Not recorded"}</dd><dt>Notes</dt><dd>{selectedDonation.notes || "No notes"}</dd></dl>
           </section>
         </div>
       )}

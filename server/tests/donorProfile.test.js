@@ -39,7 +39,8 @@ describe("Donor profile API", () => {
       where: { donorId: donorUser.donor.donorId },
     });
     expect(response.body.data.metrics.totalDonations).toBe(donationCount);
-    expect(response.body.data.metrics.rewardPoints).toBeGreaterThanOrEqual(0);
+    expect(response.body.data.metrics).not.toHaveProperty("rewardPoints");
+    expect(response.body.data.user).not.toHaveProperty("points");
     expect(response.body.data.user).toHaveProperty("nextEligibleDonationDate");
     expect(response.body.data.user).toHaveProperty("canScheduleDonation");
   });
@@ -61,12 +62,19 @@ describe("Donor profile API", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.donations.length).toBeGreaterThan(0);
+    expect(response.body.data.donations[0]).not.toHaveProperty("rewardPoints");
     const donationIds = response.body.data.donations.map((donation) => donation.donationId);
     const ownedDonations = await prisma.donationRecord.findMany({
       where: { donorId: donorUser.donor.donorId },
       select: { donationId: true },
     });
     expect(donationIds.sort()).toEqual(ownedDonations.map(({ donationId }) => donationId).sort());
+
+    const detailResponse = await request(app)
+      .get(`/api/donor/donations/${donationIds[0]}`)
+      .set("Authorization", `Bearer ${donorToken}`);
+    expect(detailResponse.status).toBe(200);
+    expect(detailResponse.body.data.donation).not.toHaveProperty("rewardPoints");
   });
 
   it("does not expose another donor's donation detail", async () => {

@@ -60,7 +60,6 @@ model Donor {
   latitude          Float?
   longitude         Float?
   donationFrequency String?
-  points            Int      @default(0)
   isEligible        Boolean  @default(true)
   lastDonationDate  DateTime?
   createdAt         DateTime @default(now())
@@ -75,7 +74,6 @@ updatedAt DateTime @default(now()) @updatedAt
   donationRecords    DonationRecord[]
   medicalCheckups    MedicalCheckup[]
   requestMatches     RequestMatch[]
-  rewardTransactions RewardTransaction[]
   campaignRegistrations CampaignRegistration[]
 }
 
@@ -260,8 +258,7 @@ model DonationRecord {
   hospitalId Int?
   hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
 
-  rewardTransactions RewardTransaction[]
-  emergencyRequests  EmergencyRequest[] @relation("DonationFulfillsRequests")
+  emergencyRequests EmergencyRequest[] @relation("DonationFulfillsRequests")
 }
 
 model MedicalCheckup {
@@ -601,19 +598,6 @@ model CampaignRegistration {
   campaign   Campaign @relation(fields: [campaignId], references: [campaignId], onDelete: Cascade)
 
   @@unique([campaignId, donorId])
-}
-
-model RewardTransaction {
-  rewardId     Int      @id @default(autoincrement())
-  pointsEarned Int
-  awardDate    DateTime @default(now())
-  description  String
-
-  donorId Int?
-  donor   Donor? @relation(fields: [donorId], references: [donorId], onDelete: SetNull)
-
-  donationId Int
-  donation   DonationRecord @relation(fields: [donationId], references: [donationId], onDelete: Cascade)
 }
 
 model AuditLog {

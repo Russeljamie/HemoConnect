@@ -68,7 +68,6 @@ const roleConfig = {
     ],
     stats: [
       { label: "Total Donations", value: "—", accent: "blue", icon: Droplet },
-      { label: "Reward Points", value: "—", accent: "gold", icon: HeartPulse },
       { label: "Next Appointment", value: "—", accent: "green", icon: CalendarDays },
       { label: "Active Campaigns", value: "—", accent: "purple", icon: Megaphone },
     ],
@@ -410,12 +409,6 @@ function App() {
           value: String(donorProfile.metrics?.totalDonations ?? 0),
           accent: "blue",
           icon: Droplet,
-        },
-        {
-          label: "Reward Points",
-          value: String(donorProfile.metrics?.rewardPoints ?? 0),
-          accent: "gold",
-          icon: HeartPulse,
         },
         {
           label: "Next Appointment",

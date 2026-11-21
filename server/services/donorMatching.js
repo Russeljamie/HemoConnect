@@ -64,8 +64,6 @@ const dispatchWave = async (request, wave) => {
           userId: true,
           latitude: true,
           longitude: true,
-          points: true,
-          _count: { select: { donationRecords: true } },
         },
       });
 
@@ -82,10 +80,7 @@ const dispatchWave = async (request, wave) => {
       distanceKm <= radiusKm
     )
     .sort((left, right) =>
-      right._count.donationRecords - left._count.donationRecords ||
-      right.points - left.points ||
-      left.distanceKm - right.distanceKm ||
-      left.donorId - right.donorId
+      left.distanceKm - right.distanceKm || left.donorId - right.donorId
     );
 
   for (const donor of rankedDonors) {
