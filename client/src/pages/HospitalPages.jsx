@@ -7,6 +7,8 @@ import "./hospital-pages.css";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const MIN_NEEDED_BY_DATE = new Date().toISOString().slice(0, 10);
+const DEFAULT_REPORT_TO = new Date().toISOString().slice(0, 10);
+const DEFAULT_REPORT_FROM = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -23,8 +25,17 @@ function getErrorMessage(error, fallback) {
 export function HospitalInventoryPage({ onInventoryUpdated }) {
   const [inventory, setInventory] = useState([]);
   const [form, setForm] = useState({ bloodType: "", unitsChange: "", reason: "" });
+  const [minimumDrafts, setMinimumDrafts] = useState({});
+  const [reportFilters, setReportFilters] = useState({
+    from: DEFAULT_REPORT_FROM,
+    to: DEFAULT_REPORT_TO,
+    bloodType: "",
+  });
+  const [report, setReport] = useState({ summary: {}, transactions: [] });
   const [loading, setLoading] = useState(true);
+  const [reportLoading, setReportLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingMinimumId, setSavingMinimumId] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -44,6 +55,21 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    hospitalAPI.getInventoryTransactions(reportFilters)
+      .then((response) => {
+        if (!cancelled) setReport(response.data || { summary: {}, transactions: [] });
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(getErrorMessage(requestError, "Unable to load inventory movements."));
+      })
+      .finally(() => {
+        if (!cancelled) setReportLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [reportFilters, refreshKey]);
+
   async function adjustStock(event) {
     event.preventDefault();
     setError("");
@@ -57,6 +83,7 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
       setNotice(response.message || "Inventory updated.");
       setForm({ bloodType: "", unitsChange: "", reason: "" });
       setLoading(true);
+      setReportLoading(true);
       setRefreshKey((current) => current + 1);
       onInventoryUpdated?.();
     } catch (requestError) {
@@ -66,18 +93,78 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
     }
   }
 
+  async function saveMinimum(item) {
+    const minimumUnits = Number(minimumDrafts[item.inventoryId] ?? item.minimumUnits);
+    if (!Number.isInteger(minimumUnits) || minimumUnits < 0 || minimumUnits > 100000) {
+      setError("Minimum stock must be a whole number from 0 to 100000.");
+      return;
+    }
+
+    setError("");
+    setNotice("");
+    setSavingMinimumId(item.inventoryId);
+    try {
+      const response = await hospitalAPI.updateInventoryMinimum(item.inventoryId, minimumUnits);
+      setInventory((current) => current.map((record) => (
+        record.inventoryId === item.inventoryId ? response.data.inventory : record
+      )));
+      setMinimumDrafts((current) => {
+        const next = { ...current };
+        delete next[item.inventoryId];
+        return next;
+      });
+      setNotice(response.message || "Minimum stock level updated.");
+      onInventoryUpdated?.();
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "Unable to update the minimum stock level."));
+    } finally {
+      setSavingMinimumId(null);
+    }
+  }
+
+  function exportTransactions() {
+    const columns = ["Date", "Blood type", "Movement", "Units changed", "Reason"];
+    const rows = report.transactions.map((transaction) => [
+      new Date(transaction.createdAt).toISOString(),
+      transaction.bloodType,
+      getMovementLabel(transaction.transactionType),
+      transaction.unitsChanged,
+      transaction.reason || "",
+    ]);
+    const csv = [columns, ...rows]
+      .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
+      .join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "hospital-inventory-movements.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function updateReportFilter(key, value) {
+    setReportLoading(true);
+    setReportFilters((current) => ({ ...current, [key]: value }));
+  }
+
   return (
     <section className="donor-page-panel hospital-operations-page" aria-labelledby="hospital-inventory-heading">
       <header className="donor-page-heading">
         <div>
           <h1 id="hospital-inventory-heading">Blood inventory</h1>
-          <p>Stock levels for your hospital.</p>
+          <p>Manage current stock, minimum levels, and every recorded stock movement.</p>
         </div>
         <Droplet size={22} aria-hidden="true" />
       </header>
 
       {error && <div className="donor-page-message error" role="alert">{error}</div>}
       {notice && <div className="donor-page-message success" role="status">{notice}</div>}
+
+      <div className="hospital-inventory-guidance">
+        <strong>Blood-drive stock:</strong> Add only accepted, usable units after screening and release.
+        Enter a reason such as “Blood drive — 5 units released”. Donor collection records are in millilitres
+        and do not automatically change inventory.
+      </div>
 
       <form className="hospital-stock-form" onSubmit={adjustStock}>
         <label>
@@ -92,17 +179,17 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
           <input type="number" min="-1000" max="1000" step="1" value={form.unitsChange} onChange={(event) => setForm({ ...form, unitsChange: event.target.value })} required />
         </label>
         <label>
-          Reason <span className="hospital-form-optional">Optional</span>
-          <input maxLength="250" value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} />
+          Reason
+          <input maxLength="250" value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} required />
         </label>
-        <button className="primary-button" type="submit" disabled={saving || Number(form.unitsChange) === 0}>
+        <button className="primary-button" type="submit" disabled={saving || Number(form.unitsChange) === 0 || form.reason.trim().length < 3}>
           {saving ? "Updating..." : "Update stock"}
         </button>
       </form>
 
       <div className="donor-table-wrap">
         <table className="donor-table hospital-inventory-table">
-          <thead><tr><th>Blood type</th><th>Available</th><th>Minimum</th><th>Stock status</th><th>Last updated</th></tr></thead>
+          <thead><tr><th>Blood type</th><th>Available</th><th>Minimum units</th><th>Stock status</th><th>Last updated</th></tr></thead>
           <tbody>
             {loading ? <tr><td colSpan="5" className="donor-table-empty">Loading inventory...</td></tr>
               : inventory.length === 0 ? <tr><td colSpan="5" className="donor-table-empty">No inventory records yet.</td></tr>
@@ -112,8 +199,23 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
                     <tr key={item.inventoryId}>
                       <td><strong className="donor-blood-type">{item.bloodType}</strong></td>
                       <td>{item.unitsAvailable} units</td>
-                      <td>{item.minimumUnits} units</td>
-                      <td><span className={`donor-status-tag${isLow ? " hospital-stock-low" : ""}`}>{isLow ? "Below minimum" : "Available"}</span></td>
+                      <td>
+                        <form className="hospital-minimum-form" onSubmit={(event) => { event.preventDefault(); saveMinimum(item); }}>
+                          <input
+                            aria-label={`Minimum units for ${item.bloodType}`}
+                            type="number"
+                            min="0"
+                            max="100000"
+                            step="1"
+                            value={minimumDrafts[item.inventoryId] ?? item.minimumUnits}
+                            onChange={(event) => setMinimumDrafts((current) => ({ ...current, [item.inventoryId]: event.target.value }))}
+                          />
+                          <button type="submit" disabled={savingMinimumId === item.inventoryId}>
+                            {savingMinimumId === item.inventoryId ? "Saving..." : "Save"}
+                          </button>
+                        </form>
+                      </td>
+                      <td><span className={`donor-status-tag${isLow ? " hospital-stock-low" : ""}`}>{isLow ? "At/below minimum" : "Available"}</span></td>
                       <td>{formatDate(item.updatedAt)}</td>
                     </tr>
                   );
@@ -121,8 +223,61 @@ export function HospitalInventoryPage({ onInventoryUpdated }) {
           </tbody>
         </table>
       </div>
+
+      <section className="hospital-movements" aria-labelledby="hospital-movements-heading">
+        <div className="hospital-movements-heading">
+          <div>
+            <h2 id="hospital-movements-heading">Stock movements</h2>
+            <p>Request fulfillment and manual changes are shown separately.</p>
+          </div>
+          <button className="primary-button" type="button" onClick={exportTransactions} disabled={reportLoading || report.transactions.length === 0}>
+            Export CSV
+          </button>
+        </div>
+        <div className="hospital-movement-filters">
+          <label>From <input type="date" required value={reportFilters.from} max={reportFilters.to} onChange={(event) => updateReportFilter("from", event.target.value)} /></label>
+          <label>To <input type="date" required value={reportFilters.to} min={reportFilters.from} max={DEFAULT_REPORT_TO} onChange={(event) => updateReportFilter("to", event.target.value)} /></label>
+          <label>Blood type
+            <select value={reportFilters.bloodType} onChange={(event) => updateReportFilter("bloodType", event.target.value)}>
+              <option value="">All blood types</option>
+              {BLOOD_TYPES.map((type) => <option key={type}>{type}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="hospital-movement-summary" aria-live="polite">
+          <div><span>Added</span><strong>{report.summary?.unitsAdded || 0} units</strong></div>
+          <div><span>Fulfilled requests</span><strong>{report.summary?.unitsFulfilled || 0} units</strong></div>
+          <div><span>Manual removals</span><strong>{report.summary?.unitsManuallyRemoved || 0} units</strong></div>
+          <div><span>Total outflow</span><strong>{report.summary?.totalUnitsOut || 0} units</strong></div>
+        </div>
+        <div className="donor-table-wrap">
+          <table className="donor-table hospital-movement-table">
+            <thead><tr><th>Date</th><th>Blood type</th><th>Movement</th><th>Units changed</th><th>Reason</th></tr></thead>
+            <tbody>
+              {reportLoading ? <tr><td colSpan="5" className="donor-table-empty">Loading movements...</td></tr>
+                : report.transactions.length === 0 ? <tr><td colSpan="5" className="donor-table-empty">No stock movements in this period.</td></tr>
+                  : report.transactions.map((transaction) => (
+                    <tr key={transaction.transactionId}>
+                      <td>{formatDate(transaction.createdAt)}</td>
+                      <td><strong className="donor-blood-type">{transaction.bloodType}</strong></td>
+                      <td>{getMovementLabel(transaction.transactionType)}</td>
+                      <td>{transaction.unitsChanged > 0 ? "+" : ""}{transaction.unitsChanged}</td>
+                      <td>{transaction.reason || "—"}</td>
+                    </tr>
+                  ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   );
+}
+
+function getMovementLabel(transactionType) {
+  if (transactionType === "REQUEST_FULFILLMENT") return "Request fulfillment";
+  if (transactionType === "STOCK_ADDITION") return "Manual addition";
+  if (transactionType === "STOCK_REMOVAL") return "Manual removal";
+  return transactionType;
 }
 
 export function HospitalDonationNeedsPage() {

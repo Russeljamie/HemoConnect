@@ -32,7 +32,6 @@ import {
 import AdminUsers from "./pages/admin/Users";
 import AdminHospitals from "./pages/admin/Hospitals";
 import AdminInventory from "./pages/admin/Inventory";
-import HospitalStockInsightsPage from "./pages/HospitalStockInsightsPage";
 import {
   HospitalAppointmentsPage,
   HospitalDonationNeedsPage,
@@ -132,7 +131,6 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "Inventory", icon: Droplet },
-      { label: "Stock Insights", icon: HeartPulse },
       { label: "Requests", icon: ClipboardList },
       { label: "Donation Needs", icon: HeartPulse },
       { label: "Appointments", icon: CalendarDays },
@@ -264,7 +262,6 @@ function App() {
   const isAdminHospitalsPage = role === "ADMIN" && location.pathname === "/admin/hospitals";
   const isAdminInventoryPage = role === "ADMIN" && location.pathname === "/admin/inventory";
   const isHospitalInventoryPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/inventory";
-  const isHospitalStockInsightsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/stock-insights";
   const isHospitalRequestsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/requests";
   const isHospitalDonationNeedsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/donation-needs";
   const isHospitalAppointmentsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/appointments";
@@ -639,8 +636,6 @@ function App() {
   const navigation = effectiveRole.nav;
   const hospitalPageLabel = isHospitalInventoryPage
     ? "Inventory"
-    : isHospitalStockInsightsPage
-      ? "Stock Insights"
     : isHospitalRequestsPage
       ? "Requests"
       : isHospitalDonationNeedsPage
@@ -707,9 +702,9 @@ function App() {
       return;
     }
 
-    if (role === "HOSPITAL_STAFF" && ["Inventory", "Stock Insights", "Requests", "Donation Needs"].includes(label)) {
+    if (role === "HOSPITAL_STAFF" && ["Inventory", "Requests", "Donation Needs"].includes(label)) {
       setMessage("");
-      const hospitalRoutes = { Inventory: "/hospital/inventory", "Stock Insights": "/hospital/stock-insights", Requests: "/hospital/requests", "Donation Needs": "/hospital/donation-needs" };
+      const hospitalRoutes = { Inventory: "/hospital/inventory", Requests: "/hospital/requests", "Donation Needs": "/hospital/donation-needs" };
       navigate(hospitalRoutes[label]);
       return;
     }
@@ -811,8 +806,6 @@ function App() {
       : isPatientMedicalNotesPage ? <PatientMedicalNotesPage /> : null;
   const hospitalPageContent = isHospitalInventoryPage
     ? <HospitalInventoryPage onInventoryUpdated={refreshHospitalProfile} />
-    : isHospitalStockInsightsPage
-      ? <HospitalStockInsightsPage />
     : isHospitalRequestsPage
       ? <HospitalRequestsPage onRequestUpdated={refreshHospitalProfile} />
       : isHospitalDonationNeedsPage
@@ -1025,8 +1018,6 @@ function App() {
                   ? isNgoCampaignsPage ? "Create and coordinate campaigns for your organization." : isNgoOutreachPage ? "Plan and track community engagement activities." : isNgoNotificationsPage ? "Updates about your organization’s campaigns." : "Measure campaign and outreach activity."
                   : isHospitalInventoryPage
                   ? "Review and adjust blood stock at your hospital."
-                  : isHospitalStockInsightsPage
-                    ? "Review recorded usage, replenishment estimates, and threshold decisions."
                   : isHospitalRequestsPage
                     ? "Create official requests, review assistance enquiries, and record fulfillment."
                     : isHospitalDonationNeedsPage

@@ -4,10 +4,8 @@ const { body, param, query } = require("express-validator");
 const {
 	getHospitalStaffProfile,
 	getHospitalInventory,
-	getHospitalStockInsights,
-	updateHospitalStockSettings,
-	decideHospitalStockThreshold,
-	getHospitalStockReport,
+	getHospitalInventoryTransactions,
+	updateHospitalInventoryMinimum,
 	adjustHospitalInventory,
 	createHospitalRequest,
 	grantPatientAccess,
@@ -37,19 +35,8 @@ const router = express.Router();
 
 router.get("/profile", authenticate, authorize("HOSPITAL_STAFF"), getHospitalStaffProfile);
 router.get("/inventory", authenticate, authorize("HOSPITAL_STAFF"), getHospitalInventory);
-router.get("/stock-insights", authenticate, authorize("HOSPITAL_STAFF"), getHospitalStockInsights);
-router.patch(
-	"/stock-insights/settings",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	body("historicalWindowDays").isInt({ min: 7, max: 365 }).withMessage("Choose a history window from 7 to 365 days.").toInt(),
-	body("replenishmentLeadTimeDays").isInt({ min: 0, max: 365 }).withMessage("Lead time must be between 0 and 365 days.").toInt(),
-	body("safetyBufferDays").isInt({ min: 0, max: 365 }).withMessage("Safety buffer must be between 0 and 365 days.").toInt(),
-	validate,
-	updateHospitalStockSettings
-);
 router.get(
-	"/stock-insights/reports",
+	"/inventory/transactions",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
 	query("from").optional().isISO8601().withMessage("Enter a valid report start date."),
@@ -58,18 +45,16 @@ router.get(
 	query("to").custom((value, { req }) => !value || !req.query.from || new Date(value) >= new Date(req.query.from)).withMessage("Report end date must be on or after the start date."),
 	query("to").custom((value, { req }) => !value || !req.query.from || new Date(value) - new Date(req.query.from) <= 366 * 24 * 60 * 60 * 1000).withMessage("Choose a report period no longer than 366 days."),
 	validate,
-	getHospitalStockReport
+	getHospitalInventoryTransactions
 );
-router.post(
-	"/stock-insights/:inventoryId/decision",
+router.patch(
+	"/inventory/:inventoryId/minimum",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
 	param("inventoryId").isInt({ min: 1 }).withMessage("Invalid inventory ID."),
-	body("decision").isIn(["ACCEPT_RECOMMENDED", "RETAIN_CURRENT", "OVERRIDE"]).withMessage("Select a valid threshold decision."),
-	body("minimumUnits").if((value, { req }) => req.body.decision === "OVERRIDE").isInt({ min: 0, max: 100000 }).withMessage("Threshold must be between 0 and 100000 units.").toInt(),
-	body("reason").if((value, { req }) => ["RETAIN_CURRENT", "OVERRIDE"].includes(req.body.decision)).trim().isLength({ min: 3, max: 500 }).withMessage("Provide a reason of 3 to 500 characters for this decision."),
+	body("minimumUnits").isInt({ min: 0, max: 100000 }).withMessage("Minimum stock must be between 0 and 100000 units.").toInt(),
 	validate,
-	decideHospitalStockThreshold
+	updateHospitalInventoryMinimum
 );
 router.patch(
 	"/inventory",
@@ -77,7 +62,7 @@ router.patch(
 	authorize("HOSPITAL_STAFF"),
 	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
 	body("unitsChange").isInt({ min: -1000, max: 1000 }).withMessage("Stock change must be between -1000 and 1000 units.").toInt().custom((value) => value !== 0).withMessage("Stock change cannot be zero."),
-	body("reason").optional({ values: "falsy" }).trim().isLength({ max: 250 }).withMessage("Reason cannot exceed 250 characters."),
+	body("reason").trim().isLength({ min: 3, max: 250 }).withMessage("Provide a reason of 3 to 250 characters."),
 	validate,
 	adjustHospitalInventory
 );

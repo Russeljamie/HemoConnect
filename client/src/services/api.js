@@ -201,20 +201,12 @@ export const hospitalAPI = {
     const response = await api.get("/hospital/inventory");
     return response.data;
   },
-  getStockInsights: async () => {
-    const response = await api.get("/hospital/stock-insights");
+  getInventoryTransactions: async (filters = {}) => {
+    const response = await api.get("/hospital/inventory/transactions", { params: filters });
     return response.data;
   },
-  updateStockSettings: async (settings) => {
-    const response = await api.patch("/hospital/stock-insights/settings", settings);
-    return response.data;
-  },
-  getStockReport: async (filters = {}) => {
-    const response = await api.get("/hospital/stock-insights/reports", { params: filters });
-    return response.data;
-  },
-  decideStockThreshold: async (inventoryId, decision) => {
-    const response = await api.post(`/hospital/stock-insights/${inventoryId}/decision`, decision);
+  updateInventoryMinimum: async (inventoryId, minimumUnits) => {
+    const response = await api.patch(`/hospital/inventory/${inventoryId}/minimum`, { minimumUnits });
     return response.data;
   },
   adjustInventory: async (adjustment) => {

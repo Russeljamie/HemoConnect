@@ -186,6 +186,134 @@
   color: #a51f30;
 }
 
+.hospital-inventory-guidance {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dce8f8;
+  border-radius: 7px;
+  background: #f5f9ff;
+  color: #52647e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.hospital-minimum-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hospital-minimum-form input {
+  width: 76px;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 1px solid #dfe4eb;
+  border-radius: 5px;
+  font: inherit;
+}
+
+.hospital-minimum-form button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #dfe4eb;
+  border-radius: 5px;
+  background: #fff;
+  color: #344054;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.hospital-minimum-form button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.hospital-movements {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.hospital-movements-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hospital-movements-heading h2 {
+  margin: 0 0 5px;
+  color: #182134;
+  font-size: 17px;
+}
+
+.hospital-movements-heading p {
+  margin: 0;
+  color: #778294;
+  font-size: 12px;
+}
+
+.hospital-movement-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e8ebf0;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.hospital-movement-filters label {
+  display: grid;
+  gap: 5px;
+  color: #556174;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.hospital-movement-filters input,
+.hospital-movement-filters select {
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid #dfe4eb;
+  border-radius: 5px;
+  background: #fff;
+  color: #263043;
+  font: inherit;
+  font-size: 11px;
+}
+
+.hospital-movement-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hospital-movement-summary > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #e8ebf0;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.hospital-movement-summary span {
+  color: #778294;
+  font-size: 11px;
+}
+
+.hospital-movement-summary strong {
+  color: #182134;
+  font-size: 15px;
+}
+
+.hospital-movement-table {
+  min-width: 760px;
+}
+
 .hospital-requests-table td svg {
   vertical-align: -2px;
   color: #a51f30;
@@ -205,6 +333,15 @@
 @media (max-width: 480px) {
   .hospital-stock-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hospital-movements-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hospital-movement-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hospital-enquiry-card {

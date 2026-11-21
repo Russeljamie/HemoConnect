@@ -159,11 +159,7 @@ function AppRoutes() {
 
       <Route
         path="/hospital/stock-insights"
-        element={
-          <ProtectedRoute requiredRole="HOSPITAL_STAFF">
-            <App />
-          </ProtectedRoute>
-        }
+        element={<Navigate to="/hospital/inventory" replace />}
       />
 
       <Route

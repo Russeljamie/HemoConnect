@@ -2,7 +2,6 @@ const prisma = require("../services/prisma");
 const { processEmergencyRequest } = require("../services/donorMatching");
 const { getPatientRecipientIds, recordRequestEvent } = require("../services/requestEvents");
 const { latestDate } = require("../utils/donationEligibility");
-const { buildInsights, startOfUtcDay } = require("../services/stockInsights");
 
 const getHospitalStaff = async (userId) => prisma.hospitalStaff.findUnique({
   where: { userId },
@@ -694,196 +693,121 @@ const getHospitalInventory = async (req, res, next) => {
   }
 };
 
-const getHospitalStockInsights = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-    const [inventory, settings] = await Promise.all([
-      prisma.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId }, orderBy: { bloodType: "asc" } }),
-      prisma.hospitalStockSettings.findUnique({ where: { hospitalId: staff.hospitalId } }),
-    ]);
-    const windowDays = settings?.historicalWindowDays || 30;
-    const since = new Date(startOfUtcDay(new Date()).getTime() - 2 * windowDays * 24 * 60 * 60 * 1000);
-    const transactions = inventory.length ? await prisma.inventoryTransaction.findMany({
-      where: {
-        inventoryId: { in: inventory.map((item) => item.inventoryId) },
-        transactionType: "REQUEST_FULFILLMENT",
-        unitsChanged: { lt: 0 },
-        createdAt: { gte: since },
-      },
-      select: { inventoryId: true, transactionType: true, unitsChanged: true, createdAt: true, inventory: { select: { bloodType: true } } },
-      orderBy: { createdAt: "asc" },
-    }) : [];
-    const normalized = transactions.map(({ inventory, ...transaction }) => ({ ...transaction, bloodType: inventory.bloodType }));
-    const insights = buildInsights({ inventory, transactions: normalized, settings });
-    return res.status(200).json({ success: true, data: insights });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const updateHospitalStockSettings = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-    const settings = await prisma.$transaction(async (tx) => {
-      const saved = await tx.hospitalStockSettings.upsert({
-        where: { hospitalId: staff.hospitalId },
-        create: {
-          hospitalId: staff.hospitalId,
-          historicalWindowDays: req.body.historicalWindowDays,
-          replenishmentLeadTimeDays: req.body.replenishmentLeadTimeDays,
-          safetyBufferDays: req.body.safetyBufferDays,
-        },
-        update: {
-          historicalWindowDays: req.body.historicalWindowDays,
-          replenishmentLeadTimeDays: req.body.replenishmentLeadTimeDays,
-          safetyBufferDays: req.body.safetyBufferDays,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          action: "HOSPITAL_STOCK_SETTINGS_UPDATED",
-          entityType: "HospitalStockSettings",
-          entityId: String(saved.settingsId),
-          actorUserId: req.user.userId,
-          details: {
-            hospitalId: staff.hospitalId,
-            historicalWindowDays: saved.historicalWindowDays,
-            replenishmentLeadTimeDays: saved.replenishmentLeadTimeDays,
-            safetyBufferDays: saved.safetyBufferDays,
-          },
-        },
-      });
-      return saved;
-    });
-    return res.status(200).json({ success: true, message: "Stock insight settings saved.", data: { settings } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const decideHospitalStockThreshold = async (req, res, next) => {
+const updateHospitalInventoryMinimum = async (req, res, next) => {
   try {
     const staff = await getHospitalStaff(req.user.userId);
     if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
     const inventoryId = Number(req.params.inventoryId);
     const result = await prisma.$transaction(async (tx) => {
-      const inventory = await tx.bloodInventory.findFirst({ where: { inventoryId, hospitalId: staff.hospitalId } });
-      if (!inventory) return { error: "NOT_FOUND" };
-      const settings = await tx.hospitalStockSettings.findUnique({ where: { hospitalId: staff.hospitalId } });
-      const windowDays = settings?.historicalWindowDays || 30;
-      const since = new Date(startOfUtcDay(new Date()).getTime() - 2 * windowDays * 24 * 60 * 60 * 1000);
-      const transactions = await tx.inventoryTransaction.findMany({
-        where: { inventoryId, transactionType: "REQUEST_FULFILLMENT", unitsChanged: { lt: 0 }, createdAt: { gte: since } },
-        select: { transactionId: true, inventoryId: true, unitsChanged: true, createdAt: true },
+      const current = await tx.bloodInventory.findFirst({
+        where: { inventoryId, hospitalId: staff.hospitalId },
       });
-      const [allInventory] = await Promise.all([
-        tx.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId } }),
-      ]);
-      const calculation = buildInsights({ inventory: allInventory, transactions: transactions.map((item) => ({ ...item, bloodType: inventory.bloodType })), settings });
-      const recommendation = calculation.recommendations.find((item) => item.inventoryId === inventoryId);
-      if (req.body.decision === "ACCEPT_RECOMMENDED" && recommendation?.recommendedThreshold === null) return { error: "NO_RECOMMENDATION" };
-      const nextThreshold = req.body.decision === "ACCEPT_RECOMMENDED"
-        ? recommendation.recommendedThreshold
-        : req.body.decision === "OVERRIDE"
-          ? req.body.minimumUnits
-          : inventory.minimumUnits;
-      let updated = inventory;
-      if (nextThreshold !== inventory.minimumUnits) {
-        const changed = await tx.bloodInventory.updateMany({
-          where: { inventoryId, hospitalId: staff.hospitalId, minimumUnits: inventory.minimumUnits },
-          data: { minimumUnits: nextThreshold },
+      if (!current) return null;
+
+      const changed = await tx.bloodInventory.updateMany({
+        where: { inventoryId, hospitalId: staff.hospitalId, minimumUnits: current.minimumUnits },
+        data: { minimumUnits: req.body.minimumUnits },
+      });
+      if (!changed.count) {
+        throw Object.assign(new Error("Inventory minimum changed concurrently."), {
+          workflowError: "INVENTORY_MINIMUM_CHANGED",
         });
-        if (!changed.count) return { error: "CHANGED" };
-        updated = await tx.bloodInventory.findFirst({ where: { inventoryId, hospitalId: staff.hospitalId } });
       }
+
+      const updated = await tx.bloodInventory.findFirst({
+        where: { inventoryId, hospitalId: staff.hospitalId },
+      });
       await tx.auditLog.create({
         data: {
-          action: "STOCK_THRESHOLD_DECISION",
+          action: "HOSPITAL_INVENTORY_MINIMUM_UPDATED",
           entityType: "BloodInventory",
           entityId: String(inventoryId),
           actorUserId: req.user.userId,
           details: {
             hospitalId: staff.hospitalId,
-            bloodType: inventory.bloodType,
-            decision: req.body.decision,
-            previousThreshold: inventory.minimumUnits,
-            newThreshold: updated.minimumUnits,
-            reason: req.body.reason || null,
-            recommendationGeneratedAt: calculation.generatedAt,
-            calculation: recommendation,
-            settings: settings || null,
-            sourceTransactionIds: transactions.map((transaction) => transaction.transactionId),
+            bloodType: current.bloodType,
+            previousMinimumUnits: current.minimumUnits,
+            newMinimumUnits: updated.minimumUnits,
           },
         },
       });
-      return { inventory: updated };
+      return updated;
     });
-    if (result.error) {
-      const errors = {
-        NOT_FOUND: [404, "Inventory record not found."],
-        NO_RECOMMENDATION: [409, "There is not enough configured usage data to accept a threshold recommendation."],
-        CHANGED: [409, "The inventory threshold changed. Refresh and retry."],
-      };
-      const [status, message] = errors[result.error];
-      return res.status(status).json({ success: false, message });
+
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Inventory record not found." });
     }
-    return res.status(200).json({ success: true, message: "Threshold decision recorded.", data: result });
+    return res.status(200).json({
+      success: true,
+      message: "Minimum stock level updated.",
+      data: { inventory: result },
+    });
   } catch (error) {
+    if (error.workflowError === "INVENTORY_MINIMUM_CHANGED") {
+      return res.status(409).json({ success: false, message: "Inventory minimum changed. Refresh and retry." });
+    }
     next(error);
   }
 };
 
-const getHospitalStockReport = async (req, res, next) => {
+const getHospitalInventoryTransactions = async (req, res, next) => {
   try {
     const staff = await getHospitalStaff(req.user.userId);
     if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-    const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const to = req.query.to ? new Date(req.query.to) : new Date();
-    to.setUTCHours(23, 59, 59, 999);
-    const inventory = await prisma.bloodInventory.findMany({ where: { hospitalId: staff.hospitalId }, orderBy: { bloodType: "asc" } });
+
+    const from = req.query.from
+      ? new Date(`${String(req.query.from).slice(0, 10)}T00:00:00.000Z`)
+      : new Date(Date.now() - 29 * 24 * 60 * 60 * 1000);
+    const to = req.query.to
+      ? new Date(`${String(req.query.to).slice(0, 10)}T23:59:59.999Z`)
+      : new Date();
+    const inventory = await prisma.bloodInventory.findMany({
+      where: {
+        hospitalId: staff.hospitalId,
+        ...(req.query.bloodType ? { bloodType: req.query.bloodType } : {}),
+      },
+      select: { inventoryId: true },
+    });
     const transactions = inventory.length ? await prisma.inventoryTransaction.findMany({
       where: {
-        inventoryId: { in: inventory.map((item) => item.inventoryId) },
-        transactionType: "REQUEST_FULFILLMENT",
-        unitsChanged: { lt: 0 },
+        inventoryId: { in: inventory.map(({ inventoryId }) => inventoryId) },
         createdAt: { gte: from, lte: to },
-        ...(req.query.bloodType ? { inventory: { bloodType: req.query.bloodType } } : {}),
       },
-      select: { unitsChanged: true, createdAt: true, inventory: { select: { bloodType: true } } },
-      orderBy: { createdAt: "asc" },
+      select: {
+        transactionId: true,
+        transactionType: true,
+        unitsChanged: true,
+        reason: true,
+        createdAt: true,
+        inventory: { select: { bloodType: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { transactionId: "desc" }],
     }) : [];
-    const dayCount = Math.max(1, Math.ceil((to - from + 1) / (24 * 60 * 60 * 1000)));
-    const byType = new Map();
-    for (const transaction of transactions) {
-      const row = byType.get(transaction.inventory.bloodType) || { bloodType: transaction.inventory.bloodType, totalUnitsIssued: 0, transactions: 0, dailyUsage: {} };
-      const units = Math.abs(transaction.unitsChanged);
-      row.totalUnitsIssued += units;
-      row.transactions += 1;
-      const day = transaction.createdAt.toISOString().slice(0, 10);
-      row.dailyUsage[day] = (row.dailyUsage[day] || 0) + units;
-      byType.set(row.bloodType, row);
-    }
-    const usage = [...byType.values()].map((row) => ({
-      ...row,
-      averageDailyUsage: row.totalUnitsIssued / dayCount,
-      dailyUsage: Object.entries(row.dailyUsage).map(([date, unitsIssued]) => ({ date, unitsIssued })).sort((a, b) => a.date.localeCompare(b.date)),
-    }));
-    const auditHistory = await prisma.auditLog.findMany({
-      where: {
-        entityType: "BloodInventory",
-        entityId: { in: inventory.map((item) => String(item.inventoryId)) },
-        action: "STOCK_THRESHOLD_DECISION",
-        createdAt: { gte: from, lte: to },
+
+    const summary = transactions.reduce((totals, transaction) => {
+      if (transaction.transactionType === "STOCK_ADDITION" && transaction.unitsChanged > 0) {
+        totals.unitsAdded += transaction.unitsChanged;
+      } else if (transaction.transactionType === "REQUEST_FULFILLMENT" && transaction.unitsChanged < 0) {
+        totals.unitsFulfilled += Math.abs(transaction.unitsChanged);
+      } else if (transaction.transactionType === "STOCK_REMOVAL" && transaction.unitsChanged < 0) {
+        totals.unitsManuallyRemoved += Math.abs(transaction.unitsChanged);
+      }
+      return totals;
+    }, { unitsAdded: 0, unitsFulfilled: 0, unitsManuallyRemoved: 0 });
+    summary.totalUnitsOut = summary.unitsFulfilled + summary.unitsManuallyRemoved;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        from,
+        to,
+        summary,
+        transactions: transactions.map(({ inventory: item, ...transaction }) => ({
+          ...transaction,
+          bloodType: item.bloodType,
+        })),
       },
-      orderBy: { createdAt: "desc" },
-      select: { entityId: true, action: true, details: true, createdAt: true, actorUser: { select: { firstName: true, lastName: true } } },
     });
-    const filteredAuditHistory = req.query.bloodType
-      ? auditHistory.filter((entry) => entry.details?.bloodType === req.query.bloodType)
-      : auditHistory;
-    return res.status(200).json({ success: true, data: { from, to, dayCount, usage, thresholdDecisions: filteredAuditHistory } });
   } catch (error) {
     next(error);
   }
@@ -1505,10 +1429,8 @@ const listHospitalStaff = async (req, res, next) => {
 module.exports = {
   getHospitalStaffProfile,
   getHospitalInventory,
-  getHospitalStockInsights,
-  updateHospitalStockSettings,
-  decideHospitalStockThreshold,
-  getHospitalStockReport,
+  getHospitalInventoryTransactions,
+  updateHospitalInventoryMinimum,
   adjustHospitalInventory,
   createHospitalRequest,
   grantPatientAccess,
