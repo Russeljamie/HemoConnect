@@ -1,6 +1,6 @@
 const prisma = require("../services/prisma");
 const { processEmergencyRequest } = require("../services/donorMatching");
-const { getPatientRecipientIds, recordRequestEvent } = require("../services/requestEvents");
+const { recordRequestEvent } = require("../services/requestEvents");
 const { latestDate } = require("../utils/donationEligibility");
 
 const getHospitalStaff = async (userId) => prisma.hospitalStaff.findUnique({
@@ -30,38 +30,6 @@ const createHospitalRequest = async (req, res, next) => {
     let emergencyRequest;
     try {
       emergencyRequest = await prisma.$transaction(async (tx) => {
-        let patient;
-        if (req.body.patientId) {
-          patient = await tx.patient.findFirst({
-            where: {
-              patientId: req.body.patientId,
-              OR: [{ hospitalId: staff.hospitalId }, { hospitalId: null }],
-            },
-            select: { patientId: true },
-          });
-          if (!patient) {
-            throw Object.assign(new Error("Patient record is not available to your hospital."), { status: 404 });
-          }
-          await tx.patient.updateMany({
-            where: { patientId: patient.patientId, hospitalId: null },
-            data: { hospitalId: staff.hospitalId },
-          });
-        } else {
-          const patientRecord = req.body.patient;
-          patient = await tx.patient.create({
-            data: {
-              firstName: patientRecord.firstName.trim(),
-              lastName: patientRecord.lastName.trim(),
-              phone: patientRecord.phone.trim(),
-              bloodType: patientRecord.bloodType || req.body.bloodType,
-              address: patientRecord.address?.trim() || null,
-              hospitalId: staff.hospitalId,
-              userId: null,
-            },
-            select: { patientId: true },
-          });
-        }
-
         const created = await tx.emergencyRequest.create({
           data: {
             bloodType: req.body.bloodType,
@@ -72,7 +40,7 @@ const createHospitalRequest = async (req, res, next) => {
             longitude,
             neededBy: req.body.neededBy,
             notes: req.body.notes || null,
-            patientId: patient.patientId,
+            patientReference: req.body.patientReference?.trim() || null,
             hospitalId: staff.hospitalId,
             requestedByUserId: req.user.userId,
             createdByStaffId: staff.staffId,
@@ -84,7 +52,7 @@ const createHospitalRequest = async (req, res, next) => {
           actorUserId: req.user.userId,
           action: "OFFICIAL_REQUEST_CREATED",
           toStatus: "OPEN",
-          details: { hospitalId: staff.hospitalId, patientId: patient.patientId },
+          details: { hospitalId: staff.hospitalId },
           title: "Official blood request created",
           message: "Your hospital has verified and created an official blood request.",
         });
@@ -115,427 +83,6 @@ const createHospitalRequest = async (req, res, next) => {
         : "Official blood request created.",
       data: { request: requestWithMatchingState, matching },
     });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const grantPatientAccess = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const patient = await prisma.patient.findFirst({
-      where: { patientId: Number(req.params.patientId), hospitalId: staff.hospitalId },
-      select: { patientId: true },
-    });
-    if (!patient) return res.status(404).json({ success: false, message: "Patient record not found." });
-
-    const representative = await prisma.user.findFirst({
-      where: { email: req.body.email.trim().toLowerCase(), role: "PATIENT", status: "ACTIVE" },
-      select: { userId: true },
-    });
-    if (!representative) {
-      return res.status(404).json({ success: false, message: "No active patient or family account was found for that email." });
-    }
-
-    const access = await prisma.patientAccess.upsert({
-      where: { patientId_userId: { patientId: patient.patientId, userId: representative.userId } },
-      create: {
-        patientId: patient.patientId,
-        userId: representative.userId,
-        relationship: req.body.relationship.trim(),
-        status: "ACTIVE",
-        grantedAt: new Date(),
-        grantedByUserId: req.user.userId,
-      },
-      update: {
-        relationship: req.body.relationship.trim(),
-        status: "ACTIVE",
-        grantedAt: new Date(),
-        revokedAt: null,
-        grantedByUserId: req.user.userId,
-      },
-    });
-
-    await prisma.auditLog.create({
-      data: {
-        action: "PATIENT_ACCESS_GRANTED",
-        entityType: "Patient",
-        entityId: String(patient.patientId),
-        actorUserId: req.user.userId,
-        details: { representativeUserId: representative.userId, relationship: access.relationship },
-      },
-    });
-    return res.status(200).json({ success: true, message: "Patient access granted.", data: { access } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const listHospitalEnquiries = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const enquiries = await prisma.assistanceEnquiry.findMany({
-      where: {
-        OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
-      },
-      include: {
-        patient: { select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true } },
-        preferredHospital: { select: { hospitalId: true, name: true } },
-        submittingUser: { select: { firstName: true, lastName: true, email: true, phone: true } },
-        reviewedByStaff: { select: { user: { select: { firstName: true, lastName: true } } } },
-      },
-      orderBy: [{ status: "asc" }, { createdAt: "asc" }],
-    });
-    return res.status(200).json({ success: true, data: { enquiries } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const reviewHospitalEnquiry = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const enquiryId = Number(req.params.enquiryId);
-    const status = req.body.decision === "VERIFY" ? "VERIFIED" : "REJECTED";
-    const enquiry = await prisma.$transaction(async (tx) => {
-      const current = await tx.assistanceEnquiry.findFirst({
-        where: {
-          enquiryId,
-          status: { in: ["PENDING_HOSPITAL_VERIFICATION", "UNDER_REVIEW"] },
-          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
-        },
-      });
-      if (!current) return null;
-      const result = await tx.assistanceEnquiry.updateMany({
-        where: {
-          enquiryId,
-          status: current.status,
-          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
-        },
-        data: {
-          status,
-          preferredHospitalId: staff.hospitalId,
-          reviewNotes: req.body.reviewNotes || null,
-          reviewedByStaffId: staff.staffId,
-          reviewedAt: new Date(),
-        },
-      });
-      if (!result.count) return null;
-
-      const updatedEnquiry = await tx.assistanceEnquiry.findUnique({
-        where: { enquiryId },
-        include: { patient: { select: { patientId: true } } },
-      });
-      const recipientIds = await getPatientRecipientIds(tx, updatedEnquiry.patientId);
-      if (updatedEnquiry.submittingUserId) recipientIds.push(updatedEnquiry.submittingUserId);
-      const uniqueRecipientIds = [...new Set(recipientIds)];
-      await tx.auditLog.create({
-        data: {
-          action: `ASSISTANCE_ENQUIRY_${status}`,
-          entityType: "AssistanceEnquiry",
-          entityId: String(enquiryId),
-          actorUserId: req.user.userId,
-          details: { status, hospitalId: staff.hospitalId, reviewNotes: updatedEnquiry.reviewNotes },
-        },
-      });
-      if (uniqueRecipientIds.length) {
-        await tx.notification.createMany({
-          data: uniqueRecipientIds.map((userId) => ({
-            type: "ASSISTANCE_ENQUIRY_UPDATE",
-            channel: "IN_APP",
-            title: status === "VERIFIED" ? "Enquiry verified" : "Enquiry reviewed",
-            message: status === "VERIFIED"
-              ? "The hospital verified your assistance enquiry. The hospital team can now create an official request."
-              : "The hospital reviewed your assistance enquiry.",
-            status: "SENT",
-            sentAt: new Date(),
-            userId,
-          })),
-        });
-      }
-      return updatedEnquiry;
-    });
-
-    if (!enquiry) {
-      const exists = await prisma.assistanceEnquiry.findUnique({
-        where: { enquiryId },
-        select: { enquiryId: true, preferredHospitalId: true, status: true },
-      });
-      if (!exists) return res.status(404).json({ success: false, message: "Assistance enquiry not found." });
-      return res.status(exists.preferredHospitalId && exists.preferredHospitalId !== staff.hospitalId ? 404 : 409).json({
-        success: false,
-        message: "This enquiry is not available for review.",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: status === "VERIFIED" ? "Enquiry verified." : "Enquiry rejected.",
-      data: { enquiry },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const convertHospitalEnquiryToRequest = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const enquiryId = Number(req.params.enquiryId);
-    const emergencyRequest = await prisma.$transaction(async (tx) => {
-      const enquiry = await tx.assistanceEnquiry.findFirst({
-        where: {
-          enquiryId,
-          status: "VERIFIED",
-          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
-        },
-      });
-      if (!enquiry) {
-        const exists = await tx.assistanceEnquiry.findUnique({
-          where: { enquiryId },
-          select: { enquiryId: true, preferredHospitalId: true },
-        });
-        throw Object.assign(
-          new Error(!exists ? "Assistance enquiry not found." : "Only a verified enquiry assigned to your hospital can become an official request."),
-          { status: !exists ? 404 : 409 }
-        );
-      }
-
-      const hospital = await tx.hospital.findUnique({
-        where: { hospitalId: staff.hospitalId },
-        select: { latitude: true, longitude: true },
-      });
-      const latitude = req.body.latitude ?? enquiry.latitude ?? hospital.latitude;
-      const longitude = req.body.longitude ?? enquiry.longitude ?? hospital.longitude;
-      if (latitude === null || longitude === null || latitude === undefined || longitude === undefined) {
-        throw Object.assign(
-          new Error("Add a request location or configure your hospital coordinates before converting this enquiry."),
-          { status: 400 }
-        );
-      }
-      const created = await tx.emergencyRequest.create({
-        data: {
-          bloodType: enquiry.requestedBloodType,
-          quantityRequired: enquiry.quantityRequired,
-          urgencyLevel: enquiry.urgencyLevel,
-          status: "OPEN",
-          neededBy: enquiry.neededBy,
-          notes: enquiry.description,
-          latitude,
-          longitude,
-          patientId: enquiry.patientId,
-          hospitalId: staff.hospitalId,
-          requestedByUserId: req.user.userId,
-          createdByStaffId: staff.staffId,
-        },
-      });
-
-      const conversion = await tx.assistanceEnquiry.updateMany({
-        where: {
-          enquiryId,
-          status: "VERIFIED",
-          resultingRequestId: null,
-          OR: [{ preferredHospitalId: staff.hospitalId }, { preferredHospitalId: null }],
-        },
-        data: { status: "CONVERTED", resultingRequestId: created.requestId },
-      });
-      if (!conversion.count) {
-        throw Object.assign(new Error("This enquiry was converted by another hospital staff member."), { status: 409 });
-      }
-      await recordRequestEvent(tx, {
-        request: created,
-        actorUserId: req.user.userId,
-        action: "OFFICIAL_REQUEST_CREATED_FROM_ENQUIRY",
-        toStatus: "OPEN",
-        details: { hospitalId: staff.hospitalId, enquiryId },
-        title: "Official blood request created",
-        message: "The hospital verified your enquiry and created an official blood request.",
-      });
-      await tx.auditLog.create({
-        data: {
-          action: "ASSISTANCE_ENQUIRY_CONVERTED",
-          entityType: "AssistanceEnquiry",
-          entityId: String(enquiryId),
-          actorUserId: req.user.userId,
-          details: { requestId: created.requestId, hospitalId: staff.hospitalId },
-        },
-      });
-      const recipientIds = await getPatientRecipientIds(tx, enquiry.patientId);
-      if (enquiry.submittingUserId && !recipientIds.includes(enquiry.submittingUserId)) {
-        recipientIds.push(enquiry.submittingUserId);
-      }
-      if (recipientIds.length) {
-        await tx.notification.createMany({
-          data: recipientIds.map((userId) => ({
-            type: "ASSISTANCE_ENQUIRY_UPDATE",
-            channel: "IN_APP",
-            title: "Assistance enquiry converted",
-            message: "Your verified enquiry is now an official hospital blood request.",
-            status: "SENT",
-            sentAt: new Date(),
-            userId,
-          })),
-        });
-      }
-      return created;
-    }).catch((error) => {
-      if (error.status) return { workflowError: error };
-      throw error;
-    });
-    if (emergencyRequest.workflowError) {
-      const { status, message } = emergencyRequest.workflowError;
-      return res.status(status).json({ success: false, message });
-    }
-
-    let matching = { alertedDonors: 0 };
-    if (emergencyRequest.latitude !== null && emergencyRequest.longitude !== null) {
-      try {
-        matching = { alertedDonors: await processEmergencyRequest(emergencyRequest.requestId) };
-      } catch (error) {
-        console.error(`Initial donor alert dispatch failed for converted request ${emergencyRequest.requestId}:`, error);
-        matching = { alertedDonors: 0, pending: true };
-      }
-    }
-    const requestWithMatchingState = await prisma.emergencyRequest.findUnique({
-      where: { requestId: emergencyRequest.requestId },
-    });
-    return res.status(201).json({
-      success: true,
-      message: "Verified enquiry converted to an official request.",
-      data: { request: requestWithMatchingState, matching },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const listHospitalPatients = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const patients = await prisma.patient.findMany({
-      where: { hospitalId: staff.hospitalId },
-      select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-    });
-    return res.status(200).json({ success: true, data: { patients } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const listHospitalDonationNeeds = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const needs = await prisma.hospitalDonationNeed.findMany({
-      where: { hospitalId: staff.hospitalId },
-      include: { _count: { select: { campaigns: true } } },
-      orderBy: [{ neededBy: "asc" }, { createdAt: "desc" }],
-    });
-    return res.status(200).json({ success: true, data: { needs } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const createHospitalDonationNeed = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const need = await prisma.$transaction(async (tx) => {
-      const created = await tx.hospitalDonationNeed.create({
-        data: {
-          bloodType: req.body.bloodType,
-          unitsNeeded: req.body.unitsNeeded,
-          neededBy: req.body.neededBy,
-          notes: req.body.notes || null,
-          hospitalId: staff.hospitalId,
-          createdByStaffId: staff.staffId,
-        },
-        include: { hospital: { select: { name: true } } },
-      });
-      const partnerNgos = await tx.nGO.findMany({
-        where: { hospitals: { some: { hospitalId: staff.hospitalId } }, isActive: true },
-        select: { users: { select: { userId: true } } },
-      });
-      const recipientIds = [...new Set(partnerNgos.flatMap(({ users }) => users.map(({ userId }) => userId)))];
-      if (recipientIds.length) {
-        await tx.notification.createMany({
-          data: recipientIds.map((userId) => ({
-            type: "HOSPITAL_DONATION_NEED",
-            channel: "IN_APP",
-            title: "Partner hospital donation need",
-            message: `${created.hospital.name} needs ${created.unitsNeeded} units of ${created.bloodType} blood by ${created.neededBy.toLocaleDateString()}.`,
-            status: "SENT",
-            sentAt: new Date(),
-            userId,
-          })),
-        });
-      }
-      await tx.auditLog.create({
-        data: {
-          action: "HOSPITAL_DONATION_NEED_CREATED",
-          entityType: "HospitalDonationNeed",
-          entityId: String(created.needId),
-          actorUserId: req.user.userId,
-          details: { hospitalId: staff.hospitalId, bloodType: created.bloodType, unitsNeeded: created.unitsNeeded },
-        },
-      });
-      return created;
-    });
-
-    return res.status(201).json({ success: true, message: "Donation need published to partner NGOs.", data: { need } });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const updateHospitalDonationNeed = async (req, res, next) => {
-  try {
-    const staff = await getHospitalStaff(req.user.userId);
-    if (!staff) return res.status(404).json({ success: false, message: "Hospital staff profile not found." });
-
-    const needId = Number(req.params.needId);
-    const existing = await prisma.hospitalDonationNeed.findFirst({
-      where: { needId, hospitalId: staff.hospitalId },
-    });
-    if (!existing) return res.status(404).json({ success: false, message: "Donation need not found." });
-
-    const allowed = {
-      OPEN: ["IN_PROGRESS", "FULFILLED", "CANCELLED"],
-      IN_PROGRESS: ["OPEN", "FULFILLED", "CANCELLED"],
-    };
-    if (!allowed[existing.status]?.includes(req.body.status)) {
-      return res.status(409).json({ success: false, message: `Cannot change a ${existing.status} donation need to ${req.body.status}.` });
-    }
-    const updated = await prisma.hospitalDonationNeed.updateMany({
-      where: { needId, hospitalId: staff.hospitalId, status: existing.status },
-      data: { status: req.body.status },
-    });
-    if (!updated.count) return res.status(409).json({ success: false, message: "Donation need changed. Refresh and retry." });
-    await prisma.auditLog.create({
-      data: {
-        action: "HOSPITAL_DONATION_NEED_STATUS_CHANGED",
-        entityType: "HospitalDonationNeed",
-        entityId: String(needId),
-        actorUserId: req.user.userId,
-        details: { fromStatus: existing.status, toStatus: req.body.status },
-      },
-    });
-    const need = await prisma.hospitalDonationNeed.findUnique({ where: { needId } });
-    return res.status(200).json({ success: true, message: "Donation need updated.", data: { need } });
   } catch (error) {
     next(error);
   }
@@ -899,7 +446,6 @@ const listHospitalRequests = async (req, res, next) => {
         ],
       },
       include: {
-        patient: { select: { patientId: true, firstName: true, lastName: true, phone: true, bloodType: true } },
         hospital: { select: { hospitalId: true, name: true } },
         matches: { select: { status: true } },
         inventoryTransactions: {
@@ -1122,15 +668,6 @@ const getAppointmentDetails = {
         lastName: true,
         bloodType: true,
         user: { select: { email: true, phone: true } },
-      },
-    },
-    patient: {
-      select: {
-        firstName: true,
-        lastName: true,
-        bloodType: true,
-        phone: true,
-        user: { select: { email: true } },
       },
     },
   },
@@ -1433,14 +970,6 @@ module.exports = {
   updateHospitalInventoryMinimum,
   adjustHospitalInventory,
   createHospitalRequest,
-  grantPatientAccess,
-  listHospitalEnquiries,
-  reviewHospitalEnquiry,
-  convertHospitalEnquiryToRequest,
-  listHospitalPatients,
-  listHospitalDonationNeeds,
-  createHospitalDonationNeed,
-  updateHospitalDonationNeed,
   listHospitalRequests,
   updateHospitalRequest,
   fulfillHospitalRequest,

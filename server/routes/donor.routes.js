@@ -12,8 +12,6 @@ const {
 	cancelDonorAppointment,
 	listDonorEmergencyAlerts,
 	respondToDonorAlert,
-	listDonorCampaigns,
-	registerForDonorCampaign,
 } = require("../controllers/donorController");
 const authenticate = require("../middleware/authenticate");
 const authorize = require("../middleware/authorize");
@@ -36,12 +34,5 @@ router.patch(
 );
 router.get("/alerts", authenticate, authorize("DONOR"), listDonorEmergencyAlerts);
 router.post("/alerts/:requestId/respond", authenticate, authorize("DONOR"), respondToDonorAlert);
-router.get("/campaigns", authenticate, authorize("DONOR"), listDonorCampaigns);
-router.post(
-	"/campaigns/:campaignId/register",
-	authenticate,
-	authorize("DONOR"),
-	registerForDonorCampaign
-);
 
 module.exports = router;

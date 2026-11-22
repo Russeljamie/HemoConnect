@@ -10,7 +10,6 @@ const {
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const GENDERS = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
 const OPEN_REQUEST_STATUSES = ["PENDING", "OPEN", "URGENT"];
-const CAMPAIGN_STATUSES = ["ACTIVE", "PLANNED"];
 const NEARBY_HOSPITAL_LIMIT = 3;
 const EARTH_RADIUS_KM = 6371;
 
@@ -77,37 +76,30 @@ const getDonorProfile = async (req, res, next) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [totalDonations, appointmentRecords, activeCampaigns, latestSuccessfulDonation] =
-      await Promise.all([
-        prisma.donationRecord.count({ where: { donorId: user.donor.donorId } }),
-        prisma.appointment.findMany({
-          where: {
-            donorId: user.donor.donorId,
-            date: { gte: today },
-            status: { in: ["SCHEDULED", "CONFIRMED"] },
-          },
-          orderBy: [{ date: "asc" }, { time: "asc" }],
-          take: 3,
-          select: {
-            appointmentId: true,
-            date: true,
-            time: true,
-            purpose: true,
-            status: true,
-          },
-        }),
-        prisma.campaign.count({
-          where: {
-            status: { in: ["ACTIVE", "PLANNED"] },
-            endDate: { gte: today },
-          },
-        }),
-        prisma.donationRecord.findFirst({
-          where: { donorId: user.donor.donorId, status: "AVAILABLE" },
-          orderBy: [{ donationDate: "desc" }, { donationId: "desc" }],
-          select: { donationDate: true },
-        }),
-      ]);
+    const [totalDonations, appointmentRecords, latestSuccessfulDonation] = await Promise.all([
+      prisma.donationRecord.count({ where: { donorId: user.donor.donorId } }),
+      prisma.appointment.findMany({
+        where: {
+          donorId: user.donor.donorId,
+          date: { gte: today },
+          status: { in: ["SCHEDULED", "CONFIRMED"] },
+        },
+        orderBy: [{ date: "asc" }, { time: "asc" }],
+        take: 3,
+        select: {
+          appointmentId: true,
+          date: true,
+          time: true,
+          purpose: true,
+          status: true,
+        },
+      }),
+      prisma.donationRecord.findFirst({
+        where: { donorId: user.donor.donorId, status: "AVAILABLE" },
+        orderBy: [{ donationDate: "desc" }, { donationId: "desc" }],
+        select: { donationDate: true },
+      }),
+    ]);
     const lastSuccessfulDonationDate = latestDate(
       user.donor.lastDonationDate,
       latestSuccessfulDonation?.donationDate
@@ -170,7 +162,6 @@ const getDonorProfile = async (req, res, next) => {
         metrics: {
           totalDonations,
           nextAppointment,
-          activeCampaigns,
         },
         donationHistory,
         upcomingAppointments,
@@ -817,13 +808,11 @@ const respondToDonorAlert = async (req, res, next) => {
           select: {
             bloodType: true,
             requestedByUserId: true,
-            patient: { select: { userId: true } },
             hospital: { select: { staff: { select: { userId: true } } } },
           },
         });
         const recipientUserIds = new Set([
           emergencyRequest?.requestedByUserId,
-          emergencyRequest?.patient?.userId,
           ...(emergencyRequest?.hospital?.staff || []).map(({ userId }) => userId),
         ].filter(Boolean));
 
@@ -871,133 +860,6 @@ const respondToDonorAlert = async (req, res, next) => {
   }
 };
 
-const listDonorCampaigns = async (req, res, next) => {
-  try {
-    const donorId = await getDonorId(req.user.userId);
-    if (!donorId) {
-      return res.status(404).json({ success: false, message: "Donor profile not found." });
-    }
-
-    const today = new Date();
-    const campaigns = await prisma.campaign.findMany({
-      where: {
-        status: { in: CAMPAIGN_STATUSES },
-        endDate: { gte: today },
-      },
-      include: {
-        hospital: { select: { name: true, location: true } },
-        ngo: { select: { name: true } },
-        donorRegistrations: {
-          where: { donorId },
-          select: { registrationId: true, status: true, registeredAt: true },
-        },
-        _count: { select: { donorRegistrations: true } },
-      },
-      orderBy: [{ startDate: "asc" }, { campaignId: "asc" }],
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        campaigns: campaigns.map((campaign) => ({
-          campaignId: campaign.campaignId,
-          name: campaign.name,
-          description: campaign.description,
-          startDate: campaign.startDate,
-          endDate: campaign.endDate,
-          location: campaign.location,
-          status: campaign.status,
-          organizer: campaign.ngo?.name || campaign.hospital?.name || null,
-          registeredDonors: campaign._count.donorRegistrations,
-          registration: campaign.donorRegistrations[0] || null,
-        })),
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-const registerForDonorCampaign = async (req, res, next) => {
-  try {
-    const campaignId = Number(req.params.campaignId);
-    if (!Number.isSafeInteger(campaignId) || campaignId < 1) {
-      return res.status(400).json({ success: false, message: "Invalid campaign ID." });
-    }
-
-    const donorId = await getDonorId(req.user.userId);
-    if (!donorId) {
-      return res.status(404).json({ success: false, message: "Donor profile not found." });
-    }
-
-    const today = new Date();
-    const campaign = await prisma.campaign.findFirst({
-      where: {
-        campaignId,
-        status: { in: CAMPAIGN_STATUSES },
-        endDate: { gte: today },
-      },
-      select: {
-        campaignId: true,
-        name: true,
-        ngoId: true,
-        ngo: {
-          select: {
-            users: { select: { userId: true } },
-          },
-        },
-      },
-    });
-
-    if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign is no longer available." });
-    }
-
-    const donor = await prisma.donor.findUnique({
-      where: { donorId },
-      select: { firstName: true, lastName: true },
-    });
-    const registration = await prisma.$transaction(async (tx) => {
-      const createdRegistration = await tx.campaignRegistration.create({
-        data: { campaignId, donorId },
-      });
-
-      if (campaign.ngo?.users.length) {
-        const message = `${donor.firstName} ${donor.lastName} registered for ${campaign.name}.`;
-        await tx.notification.createMany({
-          data: campaign.ngo.users.map(({ userId }) => ({
-            type: "CAMPAIGN_REGISTRATION",
-            channel: "IN_APP",
-            title: "New campaign registration",
-            message,
-            status: "SENT",
-            sentAt: new Date(),
-            userId,
-            campaignId: campaign.campaignId,
-          })),
-        });
-      }
-
-      return createdRegistration;
-    }).catch((error) => {
-      if (error.code === "P2002") return null;
-      throw error;
-    });
-
-    if (!registration) {
-      return res.status(409).json({ success: false, message: "You are already registered for this campaign." });
-    }
-
-    return res.status(201).json({
-      success: true,
-      message: "You are registered for this campaign.",
-      data: { registration },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 module.exports = {
   getDonorProfile,
   updateDonorProfile,
@@ -1010,6 +872,4 @@ module.exports = {
   cancelDonorAppointment,
   listDonorEmergencyAlerts,
   respondToDonorAlert,
-  listDonorCampaigns,
-  registerForDonorCampaign,
 };

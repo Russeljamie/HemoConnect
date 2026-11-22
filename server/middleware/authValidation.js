@@ -44,8 +44,8 @@ const registrationValidation = [
     .trim()
     .notEmpty().withMessage("Role is required")
     .bail()
-    .isIn(["DONOR", "PATIENT"])
-    .withMessage("Public registration is only available for donors and patients"),
+    .isIn(["DONOR"])
+    .withMessage("Public registration is only available for donors"),
 
   body("bloodType")
     .if((value, { req }) => req.body.role === "DONOR")

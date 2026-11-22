@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../services/prisma");
 
 const OPEN_REQUEST_STATUSES = ["PENDING", "OPEN", "URGENT"];
-const USER_ROLES = ["DONOR", "PATIENT", "HOSPITAL_STAFF", "NGO", "ADMIN"];
+const USER_ROLES = ["DONOR", "HOSPITAL_STAFF", "ADMIN"];
 const USER_STATUSES = ["ACTIVE", "INACTIVE"];
 const HOSPITAL_STATUSES = ["ACTIVE", "INACTIVE"];
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];

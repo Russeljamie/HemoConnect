@@ -62,16 +62,6 @@ const templates = {
     text: `Hello ${name},\n\nYour ${purpose} appointment at ${hospital} has been rescheduled to ${formatDate(date)} at ${time}.`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>Your ${escapeHtml(purpose)} appointment at ${escapeHtml(hospital)} has been rescheduled to ${escapeHtml(formatDate(date))} at ${escapeHtml(time)}.</p>`,
   }),
-  ASSISTANCE_ENQUIRY_VERIFIED: ({ name, enquiryId, hospital }) => ({
-    subject: "Your HemoConnect assistance enquiry was verified",
-    text: `Hello ${name},\n\nHospital staff at ${hospital} verified assistance enquiry #${enquiryId}. They can now create an official request. This verification alone has not yet alerted donors.`,
-    html: `<p>Hello ${escapeHtml(name)},</p><p>Hospital staff at ${escapeHtml(hospital)} verified assistance enquiry #${escapeHtml(enquiryId)}. They can now create an official request. This verification alone has not yet alerted donors.</p>`,
-  }),
-  ASSISTANCE_ENQUIRY_REJECTED: ({ name, enquiryId, hospital, reviewNotes }) => ({
-    subject: "Your HemoConnect assistance enquiry was reviewed",
-    text: `Hello ${name},\n\nHospital staff at ${hospital} could not verify assistance enquiry #${enquiryId}.${reviewNotes ? `\n\nReview note: ${reviewNotes}` : ""}\n\nPlease contact the hospital if you need more information.`,
-    html: `<p>Hello ${escapeHtml(name)},</p><p>Hospital staff at ${escapeHtml(hospital)} could not verify assistance enquiry #${escapeHtml(enquiryId)}.</p>${reviewNotes ? `<p>Review note: ${escapeHtml(reviewNotes)}</p>` : ""}<p>Please contact the hospital if you need more information.</p>`,
-  }),
   EMERGENCY_REQUEST_CREATED: ({ name, requestId, bloodType, status, hospital }) => ({
     subject: "An official HemoConnect blood request was created",
     text: `Hello ${name},\n\nHospital staff created official request #${requestId} for ${bloodType} blood at ${hospital}. Current status: ${status}.`,
@@ -86,11 +76,6 @@ const templates = {
     subject: `${urgency} HemoConnect blood donation request nearby`,
     text: `Hello ${name},\n\nYour donor profile matched official request #${requestId}: ${bloodType} blood is needed (${urgency.toLowerCase()}) about ${distanceKm} km away${hospital ? ` at ${hospital}` : ""}. Needed by ${formatDate(neededBy)}.\n\nSign in to review and respond: ${env.CLIENT_URL}/donor/alerts`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>Your donor profile matched an official request: <strong>${escapeHtml(bloodType)}</strong> blood is needed (${escapeHtml(String(urgency).toLowerCase())}) about ${escapeHtml(distanceKm)} km away${hospital ? ` at ${escapeHtml(hospital)}` : ""}. Needed by ${escapeHtml(formatDate(neededBy))}.</p><p><a href="${escapeHtml(env.CLIENT_URL)}/donor/alerts">Sign in to review and respond</a></p>`,
-  }),
-  HOSPITAL_ASSISTANCE_ENQUIRY: ({ hospital, enquiryId, patientName, bloodType, urgency }) => ({
-    subject: `Assistance enquiry #${enquiryId} requires review`,
-    text: `${hospital} has received assistance enquiry #${enquiryId} for ${patientName}. Blood type: ${bloodType}; urgency: ${urgency}. Sign in to HemoConnect and open Hospital Requests to review it.`,
-    html: `<p>${escapeHtml(hospital)} has received assistance enquiry #${escapeHtml(enquiryId)} for ${escapeHtml(patientName)}.</p><p>Blood type: ${escapeHtml(bloodType)}; urgency: ${escapeHtml(urgency)}.</p><p>Sign in to HemoConnect and open Hospital Requests to review it.</p>`,
   }),
 };
 
@@ -229,4 +214,9 @@ module.exports = {
   isEmailConfigured,
   processEmailOutbox,
   startEmailWorker,
+  renderEmailTemplate: (template, payload) => {
+    const render = templates[template];
+    if (!render) throw new Error(`Unknown email template: ${template}`);
+    return render(payload);
+  },
 };

@@ -8,14 +8,6 @@ const {
 	updateHospitalInventoryMinimum,
 	adjustHospitalInventory,
 	createHospitalRequest,
-	grantPatientAccess,
-	listHospitalEnquiries,
-	reviewHospitalEnquiry,
-	convertHospitalEnquiryToRequest,
-	listHospitalPatients,
-	listHospitalDonationNeeds,
-	createHospitalDonationNeed,
-	updateHospitalDonationNeed,
 	listHospitalRequests,
 	updateHospitalRequest,
 	fulfillHospitalRequest,
@@ -70,11 +62,9 @@ router.post(
 	"/requests",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
-	body("patientId").optional({ values: "falsy" }).isInt({ min: 1 }).withMessage("Select a valid patient record.").toInt(),
-	body("patient").if((value, { req }) => !req.body.patientId).isObject().withMessage("Enter patient details or select a patient record."),
-	body("patient.firstName").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 2, max: 50 }).withMessage("Patient first name is required."),
-	body("patient.lastName").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 2, max: 50 }).withMessage("Patient last name is required."),
-	body("patient.phone").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 10, max: 20 }).withMessage("Patient phone is required."),
+	body("patientId").custom((value) => value === undefined).withMessage("Patient records are no longer supported."),
+	body("patient").custom((value) => value === undefined).withMessage("Patient detail fields are no longer supported."),
+	body("patientReference").optional({ values: "falsy" }).trim().isLength({ max: 60 }).withMessage("Patient or case reference cannot exceed 60 characters."),
 	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
 	body("quantityRequired").isInt({ min: 1, max: 20 }).withMessage("Quantity must be between 1 and 20 units.").toInt(),
 	body("urgencyLevel").trim().isIn(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).withMessage("Select a valid urgency level."),
@@ -94,59 +84,6 @@ router.post(
 	createHospitalRequest
 );
 router.get("/requests", authenticate, authorize("HOSPITAL_STAFF"), listHospitalRequests);
-router.get("/patients", authenticate, authorize("HOSPITAL_STAFF"), listHospitalPatients);
-router.get("/donation-needs", authenticate, authorize("HOSPITAL_STAFF"), listHospitalDonationNeeds);
-router.post(
-	"/donation-needs",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
-	body("unitsNeeded").isInt({ min: 1, max: 10000 }).withMessage("Units needed must be between 1 and 10000.").toInt(),
-	body("neededBy").isISO8601().withMessage("Enter a valid needed-by date.").bail().toDate(),
-	body("notes").optional({ values: "falsy" }).trim().isLength({ max: 500 }).withMessage("Notes cannot exceed 500 characters."),
-	validate,
-	createHospitalDonationNeed
-);
-router.patch(
-	"/donation-needs/:needId",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("needId").isInt({ min: 1 }).withMessage("Invalid donation need ID."),
-	body("status").isIn(["OPEN", "IN_PROGRESS", "FULFILLED", "CANCELLED"]).withMessage("Select a valid donation need status."),
-	validate,
-	updateHospitalDonationNeed
-);
-router.get("/enquiries", authenticate, authorize("HOSPITAL_STAFF"), listHospitalEnquiries);
-router.post(
-	"/enquiries/:enquiryId/review",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("enquiryId").isInt({ min: 1 }).withMessage("Invalid enquiry ID."),
-	body("decision").isIn(["VERIFY", "REJECT"]).withMessage("Choose whether to verify or reject this enquiry."),
-	body("reviewNotes").optional({ values: "falsy" }).trim().isLength({ max: 1000 }).withMessage("Review notes cannot exceed 1000 characters."),
-	validate,
-	reviewHospitalEnquiry
-);
-router.post(
-	"/enquiries/:enquiryId/convert",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("enquiryId").isInt({ min: 1 }).withMessage("Invalid enquiry ID."),
-	body("latitude").optional({ values: "null" }).isFloat({ min: -90, max: 90 }).withMessage("Enter a valid latitude.").toFloat(),
-	body("longitude").optional({ values: "null" }).isFloat({ min: -180, max: 180 }).withMessage("Enter a valid longitude.").toFloat(),
-	validate,
-	convertHospitalEnquiryToRequest
-);
-router.post(
-	"/patients/:patientId/access",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("patientId").isInt({ min: 1 }).withMessage("Invalid patient ID."),
-	body("email").isEmail().withMessage("Enter the family representative's account email."),
-	body("relationship").trim().isLength({ min: 2, max: 80 }).withMessage("Enter the representative's relationship to the patient."),
-	validate,
-	grantPatientAccess
-);
 router.patch(
 	"/requests/:requestId",
 	authenticate,

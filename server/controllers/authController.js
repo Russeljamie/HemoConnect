@@ -64,22 +64,13 @@ const register = async (req, res, next) => {
             address: address.trim(),
           },
         });
-      } else if (role === "PATIENT") {
-        await tx.patient.create({
-          data: {
-            firstName: normalizedFirstName,
-            lastName: normalizedLastName,
-            phone: normalizedPhone,
-            userId: newUser.userId,
-          },
-        });
       } else {
         throw new Error("Unsupported public registration role");
       }
 
       await enqueueEmail(tx, newUser.email, "WELCOME", {
         name: `${newUser.firstName} ${newUser.lastName}`,
-        role: newUser.role === "DONOR" ? "donor" : "patient",
+        role: "donor",
       });
       return newUser;
     });
@@ -114,6 +105,13 @@ const login = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
+      });
+    }
+
+    if (user.role === "PATIENT") {
+      return res.status(403).json({
+        success: false,
+        message: "Patient accounts are no longer supported",
       });
     }
 

@@ -5,7 +5,6 @@ const listNotifications = async (req, res, next) => {
     const [notifications, unreadCount] = await Promise.all([
       prisma.notification.findMany({
         where: { userId: req.user.userId },
-        include: { campaign: { select: { campaignId: true, name: true } } },
         orderBy: [{ createdAt: "desc" }, { notificationId: "desc" }],
         take: 50,
       }),
