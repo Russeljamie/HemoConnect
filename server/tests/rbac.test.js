@@ -38,6 +38,25 @@ describe("Role-based access control", () => {
     expect(response.body.success).toBe(false);
   });
 
+  it("rejects public registration for the removed NGO role", async () => {
+    const response = await request(app)
+      .post("/api/auth/register")
+      .send({
+        firstName: "Test",
+        lastName: "Organization",
+        email: `removed-role-${Date.now()}@hemoconnect.test`,
+        phone: "0790000002",
+        password: "Password123!",
+        role: "NGO",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ msg: "Public registration is only available for donors" }),
+    ]));
+  });
+
   it("allows a donor to access a role-aware route", async () => {
     const response = await request(app)
       .get("/api/auth/role-access")

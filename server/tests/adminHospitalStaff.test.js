@@ -97,26 +97,26 @@ describe("Admin hospital staff account management", () => {
   });
 
   it("does not allow non-admin users to create hospital staff accounts", async () => {
-    const patient = await prisma.user.findFirst({
-      where: { role: "PATIENT", status: "ACTIVE" },
+    const donor = await prisma.user.findFirst({
+      where: { role: "DONOR", status: "ACTIVE" },
       select: { userId: true, role: true },
     });
-    const patientToken = jwt.sign(
-      { userId: patient.userId, role: patient.role },
+    const donorToken = jwt.sign(
+      { userId: donor.userId, role: donor.role },
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
 
     const response = await request(app)
       .post("/api/admin/hospital-staff")
-      .set("Authorization", `Bearer ${patientToken}`)
+      .set("Authorization", `Bearer ${donorToken}`)
       .send({});
 
     expect(response.status).toBe(403);
 
     const hospitalResponse = await request(app)
       .post("/api/admin/hospitals")
-      .set("Authorization", `Bearer ${patientToken}`)
+      .set("Authorization", `Bearer ${donorToken}`)
       .send({});
     expect(hospitalResponse.status).toBe(403);
   });

@@ -49,10 +49,9 @@ describe("Donor profile API", () => {
     const responses = await Promise.all([
       request(app).get("/api/donor/profile"),
       request(app).get("/api/donor/alerts"),
-      request(app).get("/api/donor/campaigns"),
     ].map((pendingRequest) => pendingRequest.set("Authorization", `Bearer ${donorToken}`)));
 
-    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
   });
 
   it("returns only the authenticated donor's complete donation history", async () => {
@@ -407,37 +406,6 @@ describe("Donor profile API", () => {
     )).toBe(true);
   });
 
-  it("registers the donor once for an available campaign", async () => {
-    const campaign = await prisma.campaign.findFirst({
-      where: {
-        status: { in: ["ACTIVE", "PLANNED"] },
-        endDate: { gte: new Date() },
-      },
-      select: { campaignId: true },
-    });
-    if (!campaign) return;
-
-    await prisma.campaignRegistration.deleteMany({
-      where: { campaignId: campaign.campaignId, donorId: donorUser.donor.donorId },
-    });
-
-    try {
-      const response = await request(app)
-        .post(`/api/donor/campaigns/${campaign.campaignId}/register`)
-        .set("Authorization", `Bearer ${donorToken}`);
-      expect(response.status).toBe(201);
-
-      const duplicateResponse = await request(app)
-        .post(`/api/donor/campaigns/${campaign.campaignId}/register`)
-        .set("Authorization", `Bearer ${donorToken}`);
-      expect(duplicateResponse.status).toBe(409);
-    } finally {
-      await prisma.campaignRegistration.deleteMany({
-        where: { campaignId: campaign.campaignId, donorId: donorUser.donor.donorId },
-      });
-    }
-  });
-
   it("rejects non-donor roles from donor endpoints", async () => {
     const adminUser = await prisma.user.findUnique({
       where: { email: "admin@hemoconnect.co.ke" },
@@ -454,11 +422,10 @@ describe("Donor profile API", () => {
       request(app).get("/api/donor/donations"),
       request(app).get("/api/donor/appointments"),
       request(app).get("/api/donor/alerts"),
-      request(app).get("/api/donor/campaigns"),
       request(app).post("/api/donor/alerts/1/respond").send({ response: "ACCEPT" }),
     ].map((pendingRequest) => pendingRequest.set("Authorization", `Bearer ${adminToken}`)));
 
-    expect(responses.map((response) => response.status)).toEqual([403, 403, 403, 403, 403, 403]);
+    expect(responses.map((response) => response.status)).toEqual([403, 403, 403, 403, 403]);
   });
 
   it("keeps donor registration and login working", async () => {

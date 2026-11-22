@@ -6,23 +6,23 @@ const prisma = require("../services/prisma");
 const env = require("../config/env");
 
 describe("Authenticated notifications", () => {
-  let patientUser;
   let donorUser;
-  let patientToken;
+  let adminUser;
   let donorToken;
+  let adminToken;
 
   beforeAll(async () => {
-    [patientUser, donorUser] = await Promise.all([
-      prisma.user.findUnique({ where: { email: "patient1@hemoconnect.co.ke" } }),
+    [donorUser, adminUser] = await Promise.all([
       prisma.user.findUnique({ where: { email: "donor1@hemoconnect.co.ke" } }),
+      prisma.user.findUnique({ where: { email: "admin@hemoconnect.co.ke" } }),
     ]);
-    patientToken = jwt.sign(
-      { userId: patientUser.userId, role: patientUser.role },
+    donorToken = jwt.sign(
+      { userId: donorUser.userId, role: donorUser.role },
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
-    donorToken = jwt.sign(
-      { userId: donorUser.userId, role: donorUser.role },
+    adminToken = jwt.sign(
+      { userId: adminUser.userId, role: adminUser.role },
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
@@ -34,29 +34,29 @@ describe("Authenticated notifications", () => {
         type: "TEST_NOTIFICATION",
         channel: "IN_APP",
         title: "Test notification",
-        message: "Private notification for this patient.",
+        message: "Private notification for this donor.",
         status: "SENT",
-        userId: patientUser.userId,
+        userId: donorUser.userId,
       },
     });
 
     try {
-      const [patientList, donorList] = await Promise.all([
-        request(app).get("/api/notifications").set("Authorization", `Bearer ${patientToken}`),
+      const [donorList, adminList] = await Promise.all([
         request(app).get("/api/notifications").set("Authorization", `Bearer ${donorToken}`),
+        request(app).get("/api/notifications").set("Authorization", `Bearer ${adminToken}`),
       ]);
-      expect(patientList.status).toBe(200);
-      expect(patientList.body.data.notifications).toEqual(
+      expect(donorList.status).toBe(200);
+      expect(donorList.body.data.notifications).toEqual(
         expect.arrayContaining([expect.objectContaining({ notificationId: notification.notificationId })])
       );
-      expect(donorList.status).toBe(200);
-      expect(donorList.body.data.notifications).not.toEqual(
+      expect(adminList.status).toBe(200);
+      expect(adminList.body.data.notifications).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ notificationId: notification.notificationId })])
       );
 
       const markedRead = await request(app)
         .patch(`/api/notifications/${notification.notificationId}/read`)
-        .set("Authorization", `Bearer ${patientToken}`);
+        .set("Authorization", `Bearer ${donorToken}`);
       expect(markedRead.status).toBe(200);
       expect((await prisma.notification.findUnique({
         where: { notificationId: notification.notificationId },
@@ -64,7 +64,7 @@ describe("Authenticated notifications", () => {
 
       const foreignRead = await request(app)
         .patch(`/api/notifications/${notification.notificationId}/read`)
-        .set("Authorization", `Bearer ${donorToken}`);
+        .set("Authorization", `Bearer ${adminToken}`);
       expect(foreignRead.status).toBe(404);
     } finally {
       await prisma.notification.delete({ where: { notificationId: notification.notificationId } });
