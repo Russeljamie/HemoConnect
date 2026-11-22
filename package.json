@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node scripts/run-tests.js",
+    "test:db:setup": "node scripts/setup-test-database.js",
     "postinstall": "prisma skills sync || exit 0",
     "db:seed": "node prisma/seed.js",
     "dev": "nodemon server/server.js"
