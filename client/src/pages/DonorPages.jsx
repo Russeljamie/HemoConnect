@@ -4,8 +4,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  CircleCheck,
-  Clock3,
   Droplet,
   MapPin,
   Search,
@@ -579,55 +577,6 @@ export function DonorAlertsPage() {
                 <button type="button" className="donor-text-action" disabled={busyRequestId === alert.requestId} onClick={() => respondToAlert(alert.requestId, "DECLINE")}>Decline</button>
               </div> : <strong className="donor-alert-response">{alert.matchStatus.toLowerCase()}</strong>}
             </div>
-          </article>)}</div>}
-    </section>
-  );
-}
-
-export function DonorCampaignsPage() {
-  const [campaigns, setCampaigns] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [busyCampaign, setBusyCampaign] = useState(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    donorAPI.getCampaigns()
-      .then((response) => { if (!cancelled) setCampaigns(response.data.campaigns || []); })
-      .catch((requestError) => { if (!cancelled) setError(errorMessage(requestError, "Unable to load campaigns.")); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [refreshKey]);
-
-  async function register(campaign) {
-    if (!window.confirm(`Register for ${campaign.name}?`)) return;
-    setBusyCampaign(campaign.campaignId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await donorAPI.registerForCampaign(campaign.campaignId);
-      setNotice(response.message || "Campaign registration confirmed.");
-      setRefreshKey((value) => value + 1);
-    } catch (requestError) {
-      setError(errorMessage(requestError, "Unable to register for this campaign."));
-    } finally {
-      setBusyCampaign(null);
-    }
-  }
-
-  return (
-    <section className="donor-page-panel" aria-labelledby="donor-campaigns-heading">
-      <header className="donor-page-heading"><div><h1 id="donor-campaigns-heading">Campaigns</h1><p>Upcoming blood drives and community campaigns.</p></div><span>{campaigns.length} available</span></header>
-      <PageMessage error={error} notice={notice} />
-      {loading ? <div className="donor-page-state" role="status">Loading campaigns...</div>
-        : campaigns.length === 0 ? <div className="donor-page-state">No upcoming campaigns are available.</div>
-          : <div className="donor-campaign-list">{campaigns.map((campaign) => <article className="donor-campaign-row" key={campaign.campaignId}>
-            <div className="donor-campaign-date"><span>{formatDate(campaign.startDate).split(" ")[0]}</span><strong>{formatDate(campaign.startDate).split(" ")[1]}</strong></div>
-            <div className="donor-campaign-content"><div className="donor-campaign-title"><h2>{campaign.name}</h2><span>{campaign.status}</span></div><p>{campaign.description}</p><div className="donor-campaign-meta"><span><MapPin size={14} />{campaign.location}</span><span><Clock3 size={14} />{formatDate(campaign.startDate)} – {formatDate(campaign.endDate)}</span>{campaign.organizer && <span>{campaign.organizer}</span>}</div><small>{campaign.registeredDonors} donors registered</small></div>
-            <button type="button" className={campaign.registration ? "donor-registered-button" : "primary-button"} disabled={Boolean(campaign.registration) || busyCampaign === campaign.campaignId} onClick={() => register(campaign)}>{campaign.registration ? <><CircleCheck size={16} />Registered</> : busyCampaign === campaign.campaignId ? "Registering..." : "Register"}</button>
           </article>)}</div>}
     </section>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ClipboardList, Droplet, MapPin, UserPlus } from "lucide-react";
+import { AlertTriangle, ClipboardList, Droplet } from "lucide-react";
 
 import { hospitalAPI } from "../services/api";
 import "./donor-pages.css";
@@ -280,115 +280,9 @@ function getMovementLabel(transactionType) {
   return transactionType;
 }
 
-export function HospitalDonationNeedsPage() {
-  const [needs, setNeeds] = useState([]);
-  const [form, setForm] = useState({ bloodType: "", unitsNeeded: "1", neededBy: "", notes: "" });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    hospitalAPI.getDonationNeeds()
-      .then((response) => {
-        if (!cancelled) setNeeds(response.data.needs || []);
-      })
-      .catch((requestError) => {
-        if (!cancelled) setError(getErrorMessage(requestError, "Unable to load hospital donation needs."));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [refreshKey]);
-
-  async function createNeed(event) {
-    event.preventDefault();
-    setError("");
-    setNotice("");
-    setSaving(true);
-    try {
-      const response = await hospitalAPI.createDonationNeed({
-        ...form,
-        unitsNeeded: Number(form.unitsNeeded),
-      });
-      setNotice(response.message || "Donation need published to partner NGOs.");
-      setForm({ bloodType: "", unitsNeeded: "1", neededBy: "", notes: "" });
-      setLoading(true);
-      setRefreshKey((current) => current + 1);
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "Unable to publish this donation need."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function updateNeed(need, status) {
-    setError("");
-    setNotice("");
-    try {
-      const response = await hospitalAPI.updateDonationNeed(need.needId, status);
-      setNotice(response.message || "Donation need updated.");
-      setLoading(true);
-      setRefreshKey((current) => current + 1);
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "Unable to update this donation need."));
-    }
-  }
-
-  return (
-    <section className="donor-page-panel hospital-operations-page" aria-labelledby="hospital-needs-heading">
-      <header className="donor-page-heading">
-        <div>
-          <h1 id="hospital-needs-heading">Donation needs</h1>
-          <p>Publish blood-drive priorities to your partner NGOs. This is separate from patient requests.</p>
-        </div>
-        <Droplet size={22} aria-hidden="true" />
-      </header>
-      {error && <div className="donor-page-message error" role="alert">{error}</div>}
-      {notice && <div className="donor-page-message success" role="status">{notice}</div>}
-      <form className="hospital-stock-form" onSubmit={createNeed}>
-        <label>Blood type<select value={form.bloodType} onChange={(event) => setForm({ ...form, bloodType: event.target.value })} required><option value="">Choose blood type</option>{BLOOD_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
-        <label>Units needed<input type="number" min="1" max="10000" value={form.unitsNeeded} onChange={(event) => setForm({ ...form, unitsNeeded: event.target.value })} required /></label>
-        <label>Needed by<input type="date" min={MIN_NEEDED_BY_DATE} value={form.neededBy} onChange={(event) => setForm({ ...form, neededBy: event.target.value })} required /></label>
-        <label className="hospital-form-wide">Notes<input maxLength="500" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
-        <button className="primary-button" type="submit" disabled={saving}>{saving ? "Publishing..." : "Publish donation need"}</button>
-      </form>
-      <div className="donor-table-wrap">
-        <table className="donor-table hospital-requests-table">
-          <thead><tr><th>Blood type</th><th>Units needed</th><th>Needed by</th><th>Campaigns</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>{loading ? <tr><td colSpan="6" className="donor-table-empty">Loading donation needs...</td></tr>
-            : needs.length === 0 ? <tr><td colSpan="6" className="donor-table-empty">No donation needs published.</td></tr>
-              : needs.map((need) => <tr key={need.needId}>
-                <td><strong className="donor-blood-type">{need.bloodType}</strong></td>
-                <td>{need.unitsNeeded}</td>
-                <td>{formatDate(need.neededBy)}</td>
-                <td>{need._count?.campaigns || 0}</td>
-                <td><span className="donor-status-tag">{need.status}</span></td>
-                <td>
-                  {need.status === "OPEN" && <button className="donor-text-action" type="button" onClick={() => updateNeed(need, "IN_PROGRESS")}>Coordinate</button>}
-                  {need.status === "IN_PROGRESS" && <button className="donor-text-action" type="button" onClick={() => updateNeed(need, "FULFILLED")}>Mark fulfilled</button>}
-                  {["OPEN", "IN_PROGRESS"].includes(need.status) && <button className="donor-text-action danger" type="button" onClick={() => updateNeed(need, "CANCELLED")}>Cancel</button>}
-                </td>
-              </tr>)}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
 export function HospitalRequestsPage({ onRequestUpdated }) {
   const [requests, setRequests] = useState([]);
-  const [enquiries, setEnquiries] = useState([]);
-  const [patients, setPatients] = useState([]);
   const [requestForm, setRequestForm] = useState({
-    patientId: "",
-    firstName: "",
-    lastName: "",
-    phone: "",
     bloodType: "",
     quantityRequired: "1",
     urgencyLevel: "MEDIUM",
@@ -396,10 +290,9 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
     latitude: "",
     longitude: "",
     notes: "",
+    patientReference: "",
   });
-  const [accessForm, setAccessForm] = useState({ patientId: "", email: "", relationship: "" });
   const [fulfillmentQuantities, setFulfillmentQuantities] = useState({});
-  const [enquiryLocations, setEnquiryLocations] = useState({});
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -409,12 +302,10 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([hospitalAPI.getRequests(), hospitalAPI.getEnquiries(), hospitalAPI.getPatients()])
-      .then(([requestsResponse, enquiriesResponse, patientsResponse]) => {
+    hospitalAPI.getRequests()
+      .then((requestsResponse) => {
         if (cancelled) return;
         setRequests(requestsResponse.data.requests || []);
-        setEnquiries(enquiriesResponse.data.enquiries || []);
-        setPatients(patientsResponse.data.patients || []);
       })
       .catch((requestError) => {
         if (!cancelled) setError(getErrorMessage(requestError, "Unable to load incoming requests."));
@@ -437,7 +328,6 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
     setError("");
     setNotice("");
     setSaving(true);
-    const patientId = requestForm.patientId ? Number(requestForm.patientId) : undefined;
     const payload = {
       bloodType: requestForm.bloodType,
       quantityRequired: Number(requestForm.quantityRequired),
@@ -446,45 +336,19 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
       latitude: requestForm.latitude === "" ? undefined : Number(requestForm.latitude),
       longitude: requestForm.longitude === "" ? undefined : Number(requestForm.longitude),
       notes: requestForm.notes || undefined,
-      ...(patientId ? { patientId } : {
-        patient: {
-          firstName: requestForm.firstName,
-          lastName: requestForm.lastName,
-          phone: requestForm.phone,
-          bloodType: requestForm.bloodType,
-        },
-      }),
+      patientReference: requestForm.patientReference.trim() || undefined,
     };
     try {
       const response = await hospitalAPI.createRequest(payload);
       setRequestForm({
-        patientId: "", firstName: "", lastName: "", phone: "", bloodType: "",
+        bloodType: "",
         quantityRequired: "1", urgencyLevel: "MEDIUM", neededBy: "",
         latitude: "", longitude: "", notes: "",
+        patientReference: "",
       });
       refreshData(response.message || "Official request created.");
     } catch (requestError) {
       setError(getErrorMessage(requestError, "Unable to create the official request."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function grantAccess(event) {
-    event.preventDefault();
-    setError("");
-    setNotice("");
-    setSaving(true);
-    try {
-      const response = await hospitalAPI.createPatientAccess(
-        Number(accessForm.patientId),
-        accessForm.email,
-        accessForm.relationship
-      );
-      setAccessForm({ patientId: "", email: "", relationship: "" });
-      setNotice(response.message || "Patient access granted.");
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "Unable to grant patient access."));
     } finally {
       setSaving(false);
     }
@@ -522,127 +386,38 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
     }
   }
 
-  async function reviewEnquiry(enquiry, decision) {
-    setError("");
-    setNotice("");
-    setUpdatingId(`enquiry-${enquiry.enquiryId}`);
-    try {
-      const response = await hospitalAPI.reviewEnquiry(enquiry.enquiryId, decision);
-      refreshData(response.message || "Enquiry reviewed.");
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "Unable to review this enquiry."));
-    } finally {
-      setUpdatingId(null);
-    }
-  }
-
-  async function convertEnquiry(enquiry) {
-    setError("");
-    setNotice("");
-    setUpdatingId(`enquiry-${enquiry.enquiryId}`);
-    const location = enquiryLocations[enquiry.enquiryId] || {};
-    try {
-      const response = await hospitalAPI.convertEnquiry(enquiry.enquiryId, {
-        latitude: location.latitude === "" ? undefined : Number(location.latitude),
-        longitude: location.longitude === "" ? undefined : Number(location.longitude),
-      });
-      refreshData(response.message || "Verified enquiry converted to an official request.");
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "Unable to convert this enquiry."));
-    } finally {
-      setUpdatingId(null);
-    }
-  }
-
   return (
     <section className="donor-page-panel hospital-operations-page" aria-labelledby="hospital-requests-heading">
       <header className="donor-page-heading">
         <div>
           <h1 id="hospital-requests-heading">Hospital request coordination</h1>
-          <p>Create official requests, verify assistance enquiries, and record fulfillment.</p>
+          <p>Create official requests and record fulfillment.</p>
         </div>
         <ClipboardList size={22} aria-hidden="true" />
       </header>
 
       {error && <div className="donor-page-message error" role="alert">{error}</div>}
       {notice && <div className="donor-page-message success" role="status">{notice}</div>}
-      <div className="donor-page-message" role="note">
-        Assistance enquiries are reviewed from the shared hospital queue below. <a href="#hospital-assistance-enquiries">Jump to enquiries</a>
-      </div>
-
       <form className="hospital-stock-form hospital-request-create-form" onSubmit={createOfficialRequest}>
         <h2>Create official blood request</h2>
         <p>Only hospital staff can create an official request and start donor matching.</p>
-        <label>
-          Patient record <span className="hospital-form-optional">Optional</span>
-          <select value={requestForm.patientId} onChange={(event) => setRequestForm({ ...requestForm, patientId: event.target.value })}>
-            <option value="">Create an accountless patient record</option>
-            {patients.map((patient) => <option key={patient.patientId} value={patient.patientId}>{patient.firstName} {patient.lastName} · {patient.phone}</option>)}
-          </select>
-        </label>
-        {!requestForm.patientId && <>
-          <label>Patient first name<input value={requestForm.firstName} onChange={(event) => setRequestForm({ ...requestForm, firstName: event.target.value })} minLength="2" maxLength="50" required /></label>
-          <label>Patient last name<input value={requestForm.lastName} onChange={(event) => setRequestForm({ ...requestForm, lastName: event.target.value })} minLength="2" maxLength="50" required /></label>
-          <label>Patient phone<input value={requestForm.phone} onChange={(event) => setRequestForm({ ...requestForm, phone: event.target.value })} minLength="10" maxLength="20" required /></label>
-        </>}
         <label>Blood type<select value={requestForm.bloodType} onChange={(event) => setRequestForm({ ...requestForm, bloodType: event.target.value })} required><option value="">Choose blood type</option>{BLOOD_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
         <label>Units required<input type="number" min="1" max="20" value={requestForm.quantityRequired} onChange={(event) => setRequestForm({ ...requestForm, quantityRequired: event.target.value })} required /></label>
         <label>Urgency<select value={requestForm.urgencyLevel} onChange={(event) => setRequestForm({ ...requestForm, urgencyLevel: event.target.value })} required>{["LOW", "MEDIUM", "HIGH", "CRITICAL"].map((level) => <option key={level}>{level}</option>)}</select></label>
         <label>Needed by<input type="date" min={MIN_NEEDED_BY_DATE} value={requestForm.neededBy} onChange={(event) => setRequestForm({ ...requestForm, neededBy: event.target.value })} required /></label>
         <label>Request latitude <span className="hospital-form-optional">Uses hospital location if blank</span><input type="number" step="any" min="-90" max="90" value={requestForm.latitude} onChange={(event) => setRequestForm({ ...requestForm, latitude: event.target.value })} /></label>
         <label>Request longitude <span className="hospital-form-optional">Uses hospital location if blank</span><input type="number" step="any" min="-180" max="180" value={requestForm.longitude} onChange={(event) => setRequestForm({ ...requestForm, longitude: event.target.value })} /></label>
+        <label className="hospital-form-wide">Patient or case reference <span className="hospital-form-optional">Ward or case reference only. Do not enter names or phone numbers.</span><input maxLength="60" value={requestForm.patientReference} onChange={(event) => setRequestForm({ ...requestForm, patientReference: event.target.value })} /></label>
         <label className="hospital-form-wide">Notes<input maxLength="500" value={requestForm.notes} onChange={(event) => setRequestForm({ ...requestForm, notes: event.target.value })} /></label>
         <button className="primary-button" type="submit" disabled={saving}>{saving ? "Creating..." : "Create request and notify matched donors"}</button>
       </form>
 
-      <form className="hospital-stock-form hospital-access-form" onSubmit={grantAccess}>
-        <h2><UserPlus size={18} /> Grant family representative access</h2>
-        <label>Patient<select value={accessForm.patientId} onChange={(event) => setAccessForm({ ...accessForm, patientId: event.target.value })} required><option value="">Select patient</option>{patients.map((patient) => <option key={patient.patientId} value={patient.patientId}>{patient.firstName} {patient.lastName}</option>)}</select></label>
-        <label>Representative account email<input type="email" value={accessForm.email} onChange={(event) => setAccessForm({ ...accessForm, email: event.target.value })} required /></label>
-        <label>Relationship<input maxLength="80" value={accessForm.relationship} onChange={(event) => setAccessForm({ ...accessForm, relationship: event.target.value })} required /></label>
-        <button className="primary-button" type="submit" disabled={saving || !patients.length}>Grant access</button>
-      </form>
 
-      <div className="hospital-enquiries-list" id="hospital-assistance-enquiries">
-        <h2>Assistance enquiries requiring hospital verification</h2>
-        <p className="hospital-enquiries-guidance">
-          This is a shared queue for authorized staff at this hospital; enquiries are not assigned to a specific staff member. The reviewer is recorded after verification or rejection.
-        </p>
-        {loading ? <p className="donor-table-empty">Loading enquiries...</p>
-          : enquiries.length === 0 ? <p className="donor-table-empty">No assistance enquiries are awaiting review.</p>
-            : enquiries.map((enquiry) => (
-              <article className="hospital-enquiry-card" key={enquiry.enquiryId}>
-                <div>
-                  <strong>{enquiry.patient?.firstName} {enquiry.patient?.lastName} · {enquiry.requestedBloodType || "Blood type not specified"}</strong>
-                  <p>{enquiry.description}</p>
-                  <small>{enquiry.patient?.phone} · {enquiry.preferredHospital?.name || "Unassigned enquiry"} · {formatDate(enquiry.createdAt)}</small>
-                  {enquiry.reviewedByStaff && <small className="hospital-enquiry-reviewer">Reviewed by {enquiry.reviewedByStaff.user.firstName} {enquiry.reviewedByStaff.user.lastName}</small>}
-                  {enquiry.reviewNotes && <p>Review: {enquiry.reviewNotes}</p>}
-                </div>
-                <span className="donor-status-tag">{enquiry.status.replaceAll("_", " ")}</span>
-                {["PENDING_HOSPITAL_VERIFICATION", "UNDER_REVIEW"].includes(enquiry.status) && (
-                  <div className="hospital-enquiry-actions">
-                    <button className="donor-text-action" type="button" disabled={updatingId === `enquiry-${enquiry.enquiryId}`} onClick={() => reviewEnquiry(enquiry, "VERIFY")}>Verify</button>
-                    <button className="donor-text-action danger" type="button" disabled={updatingId === `enquiry-${enquiry.enquiryId}`} onClick={() => reviewEnquiry(enquiry, "REJECT")}>Reject</button>
-                  </div>
-                )}
-                {enquiry.status === "VERIFIED" && (
-                  <div className="hospital-enquiry-actions">
-                    {!enquiry.latitude && !enquiry.longitude && <span className="hospital-form-optional"><MapPin size={14} /> Hospital coordinates must be configured or enter below</span>}
-                    <input aria-label="Fallback latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude (optional)" value={enquiryLocations[enquiry.enquiryId]?.latitude || ""} onChange={(event) => setEnquiryLocations({ ...enquiryLocations, [enquiry.enquiryId]: { ...enquiryLocations[enquiry.enquiryId], latitude: event.target.value } })} />
-                    <input aria-label="Fallback longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude (optional)" value={enquiryLocations[enquiry.enquiryId]?.longitude || ""} onChange={(event) => setEnquiryLocations({ ...enquiryLocations, [enquiry.enquiryId]: { ...enquiryLocations[enquiry.enquiryId], longitude: event.target.value } })} />
-                    <button className="primary-button" type="button" disabled={updatingId === `enquiry-${enquiry.enquiryId}`} onClick={() => convertEnquiry(enquiry)}>Create official request &amp; match donors</button>
-                  </div>
-                )}
-              </article>
-            ))}
-      </div>
-
-      <div className="patient-requests-list">
-        <div className="patient-requests-list-heading"><h2>Request history</h2><span>{requests.length} requests</span></div>
+      <div className="donor-requests-list">
+        <div className="donor-requests-list-heading"><h2>Request history</h2><span>{requests.length} requests</span></div>
       <div className="donor-table-wrap">
         <table className="donor-table hospital-requests-table">
-          <thead><tr><th>Blood type</th><th>Units / fulfilled</th><th>Urgency</th><th>Needed by</th><th>Patient</th><th>Hospital</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Blood type</th><th>Units / fulfilled</th><th>Urgency</th><th>Needed by</th><th>Reference</th><th>Hospital</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             {loading ? <tr><td colSpan="8" className="donor-table-empty">Loading requests...</td></tr>
               : requests.length === 0 ? <tr><td colSpan="8" className="donor-table-empty">No hospital requests.</td></tr>
@@ -655,7 +430,7 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
                       <td>{request.quantityRequired} / {request.fulfilledQuantity || 0}</td>
                       <td>{request.urgencyLevel === "CRITICAL" && <AlertTriangle size={14} aria-label="Critical urgency" />} {request.urgencyLevel}</td>
                       <td>{formatDate(request.neededBy)}</td>
-                      <td>{request.patient ? `${request.patient.firstName} ${request.patient.lastName}` : "Patient"}</td>
+                      <td>{request.patientReference || "—"}</td>
                       <td>{request.hospital?.name || "Open queue"}</td>
                       <td><span className="donor-status-tag">{request.status}</span></td>
                       <td>
@@ -841,8 +616,8 @@ export function HospitalAppointmentsPage({ onAppointmentUpdated }) {
             {loading ? <tr><td colSpan="7" className="donor-table-empty">Loading appointments...</td></tr>
               : appointments.length === 0 ? <tr><td colSpan="7" className="donor-table-empty">No appointments for this hospital.</td></tr>
                 : appointments.map((appointment) => {
-                  const person = appointment.donor || appointment.patient;
-                  const contact = appointment.donor?.user || appointment.patient;
+                  const person = appointment.donor;
+                  const contact = appointment.donor?.user;
                   return (
                     <tr key={appointment.appointmentId}>
                       <td>{formatDate(appointment.date)}</td>

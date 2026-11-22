@@ -83,9 +83,7 @@ export const authAPI = {
 
 export const ROLE_DASHBOARDS = {
   DONOR: "/dashboard",
-  PATIENT: "/patient-dashboard",
   HOSPITAL_STAFF: "/hospital-dashboard",
-  NGO: "/ngo-dashboard",
   ADMIN: "/admin-dashboard",
 };
 
@@ -136,45 +134,6 @@ export const donorAPI = {
     const result = await api.post(`/donor/alerts/${requestId}/respond`, { response });
     return result.data;
   },
-  getCampaigns: async () => {
-    const response = await api.get("/donor/campaigns");
-    return response.data;
-  },
-  registerForCampaign: async (campaignId) => {
-    const response = await api.post(`/donor/campaigns/${campaignId}/register`);
-    return response.data;
-  },
-};
-
-export const patientAPI = {
-  getHospitals: async () => {
-    const response = await api.get("/patient/hospitals");
-    return response.data;
-  },
-  getProfile: async () => {
-    const response = await api.get("/patient/profile");
-    return response.data;
-  },
-  getRequests: async () => {
-    const response = await api.get("/patient/requests");
-    return response.data;
-  },
-  getAppointments: async () => {
-    const response = await api.get("/patient/appointments");
-    return response.data;
-  },
-  getMedicalNotes: async () => {
-    const response = await api.get("/patient/medical-notes");
-    return response.data;
-  },
-  createAssistanceEnquiry: async (enquiryData) => {
-    const response = await api.post("/patient/enquiries", enquiryData);
-    return response.data;
-  },
-  markNotificationRead: async (notificationId) => {
-    const response = await api.patch(`/patient/notifications/${notificationId}/read`);
-    return response.data;
-  },
 };
 
 export const notificationsAPI = {
@@ -217,44 +176,12 @@ export const hospitalAPI = {
     const response = await api.get("/hospital/requests");
     return response.data;
   },
-  getPatients: async () => {
-    const response = await api.get("/hospital/patients");
-    return response.data;
-  },
   createRequest: async (requestData) => {
     const response = await api.post("/hospital/requests", requestData);
     return response.data;
   },
-  getEnquiries: async () => {
-    const response = await api.get("/hospital/enquiries");
-    return response.data;
-  },
-  reviewEnquiry: async (enquiryId, decision, reviewNotes) => {
-    const response = await api.post(`/hospital/enquiries/${enquiryId}/review`, { decision, reviewNotes });
-    return response.data;
-  },
-  convertEnquiry: async (enquiryId, location) => {
-    const response = await api.post(`/hospital/enquiries/${enquiryId}/convert`, location);
-    return response.data;
-  },
   fulfillRequest: async (requestId, quantity, outcomeNotes) => {
     const response = await api.post(`/hospital/requests/${requestId}/fulfill`, { quantity, outcomeNotes });
-    return response.data;
-  },
-  createPatientAccess: async (patientId, email, relationship) => {
-    const response = await api.post(`/hospital/patients/${patientId}/access`, { email, relationship });
-    return response.data;
-  },
-  getDonationNeeds: async () => {
-    const response = await api.get("/hospital/donation-needs");
-    return response.data;
-  },
-  createDonationNeed: async (need) => {
-    const response = await api.post("/hospital/donation-needs", need);
-    return response.data;
-  },
-  updateDonationNeed: async (needId, status) => {
-    const response = await api.patch(`/hospital/donation-needs/${needId}`, { status });
     return response.data;
   },
   updateRequest: async (requestId, status) => {
@@ -287,57 +214,6 @@ export const hospitalAPI = {
   },
   getStaff: async () => {
     const response = await api.get("/hospital/staff");
-    return response.data;
-  },
-};
-
-export const ngoAPI = {
-  getProfile: async () => {
-    const response = await api.get("/ngo/profile");
-    return response.data;
-  },
-  getCampaigns: async () => {
-    const response = await api.get("/ngo/campaigns");
-    return response.data;
-  },
-  getDonationNeeds: async () => {
-    const response = await api.get("/ngo/donation-needs");
-    return response.data;
-  },
-  createCampaign: async (campaign) => {
-    const response = await api.post("/ngo/campaigns", campaign);
-    return response.data;
-  },
-  updateCampaign: async (campaignId, updates) => {
-    const response = await api.patch(`/ngo/campaigns/${campaignId}`, updates);
-    return response.data;
-  },
-  getOutreachActivities: async () => {
-    const response = await api.get("/ngo/outreach");
-    return response.data;
-  },
-  createOutreachActivity: async (activity) => {
-    const response = await api.post("/ngo/outreach", activity);
-    return response.data;
-  },
-  updateOutreachActivity: async (activityId, updates) => {
-    const response = await api.patch(`/ngo/outreach/${activityId}`, updates);
-    return response.data;
-  },
-  getNotifications: async () => {
-    const response = await api.get("/ngo/notifications");
-    return response.data;
-  },
-  markNotificationRead: async (notificationId) => {
-    const response = await api.patch(`/ngo/notifications/${notificationId}/read`);
-    return response.data;
-  },
-  markAllNotificationsRead: async () => {
-    const response = await api.patch("/ngo/notifications/read-all");
-    return response.data;
-  },
-  getReports: async (params) => {
-    const response = await api.get("/ngo/reports", { params });
     return response.data;
   },
 };

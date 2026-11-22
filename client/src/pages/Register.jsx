@@ -189,8 +189,8 @@ function Register() {
 
             <p>
               Create your HemoConnect account and connect with
-              hospitals, donation campaigns, emergency requests,
-              appointments, and other blood donation services.
+              hospitals, emergency requests, appointments, and
+              other blood donation services.
             </p>
           </div>
 
@@ -359,27 +359,6 @@ function Register() {
                   </div>
                 </label>
 
-                <label
-                  className={`role-option ${
-                    formData.role === "PATIENT" ? "selected" : ""
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="role"
-                    value="PATIENT"
-                    checked={formData.role === "PATIENT"}
-                    onChange={handleChange}
-                    disabled={loading}
-                  />
-
-                  <div>
-                    <strong>Patient</strong>
-                    <span>
-                      Request blood and manage your blood requirements.
-                    </span>
-                  </div>
-                </label>
               </div>
             </div>
 

@@ -8,9 +8,7 @@ const PAGE_SIZE = 15;
 
 const roleLabels = {
   DONOR: "Donor",
-  PATIENT: "Patient",
   HOSPITAL_STAFF: "Hospital staff",
-  NGO: "NGO",
   ADMIN: "Admin",
 };
 
@@ -231,9 +229,7 @@ function Users() {
           <select value={roleInput} onChange={(event) => setRoleInput(event.target.value)}>
             <option value="">All roles</option>
             <option value="DONOR">Donor</option>
-            <option value="PATIENT">Patient</option>
             <option value="HOSPITAL_STAFF">Hospital staff</option>
-            <option value="NGO">NGO</option>
             <option value="ADMIN">Admin</option>
           </select>
         </label>

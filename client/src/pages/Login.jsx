@@ -239,10 +239,6 @@ function Login() {
             <Link to="/register">Create an account</Link>
           </p>
 
-          <p className="auth-register-text">
-            Need help with a blood request?{" "}
-            <Link to="/assistance">Contact a hospital</Link>
-          </p>
 
           <p className="auth-footer">
             © 2026 HemoConnect. Blood donation saves lives.
