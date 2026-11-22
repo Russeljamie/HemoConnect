@@ -39,3 +39,5 @@ Thumbs.db
 .devin/
 backups/
 *.dump
+.env.test
+feedbackoutput.md
