@@ -25,17 +25,12 @@ updatedAt DateTime @default(now()) @updatedAt
 
   admin                   Admin?
   donor                   Donor?
-  patient                 Patient?
   hospitalStaff           HospitalStaff?
-  ngoUser                 NGOUser?
   notifications           Notification[]
   alerts                  Alert[]                @relation("UserReceivesAlerts")
   auditLogs               AuditLog[]             @relation("UserAuditLogs")
   inventoryTransactions   InventoryTransaction[] @relation("UserInventoryTransactions")
   createdEmergencyRequests EmergencyRequest[]     @relation("UserCreatesEmergencyRequests")
-  submittedAssistanceEnquiries AssistanceEnquiry[] @relation("UserSubmitsAssistanceEnquiries")
-  patientAccessGrants PatientAccess[] @relation("PatientAccessGrantee")
-  grantedPatientAccess PatientAccess[] @relation("PatientAccessGrantor")
   passwordResetTokens PasswordResetToken[]
 }
 
@@ -44,8 +39,6 @@ model Admin {
   userId  Int @unique
   user    User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  campaigns Campaign[]
-  ngoUsers  NGOUser[] @relation("AdminCreatesNGOUsers")
 }
 
 
@@ -74,36 +67,8 @@ updatedAt DateTime @default(now()) @updatedAt
   donationRecords    DonationRecord[]
   medicalCheckups    MedicalCheckup[]
   requestMatches     RequestMatch[]
-  campaignRegistrations CampaignRegistration[]
 }
 
-
-
-model Patient {
-  patientId Int      @id @default(autoincrement())
-  firstName String
-  lastName  String
-  bloodType String?
-  address   String?
-  phone     String
-  birthDate DateTime?
-  gender    String?
-  createdAt DateTime @default(now())
-
-updatedAt DateTime @default(now()) @updatedAt
-
-
-  userId Int? @unique
-  user   User? @relation(fields: [userId], references: [userId], onDelete: SetNull)
-
-  hospitalId Int?
-  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId])
-
-  appointments      Appointment[]
-  emergencyRequests EmergencyRequest[]
-  accessGrants      PatientAccess[] @relation("PatientAccessPatient")
-  assistanceEnquiries AssistanceEnquiry[]
-}
 
 
 model Hospital {
@@ -122,50 +87,14 @@ model Hospital {
 updatedAt DateTime @default(now()) @updatedAt
 
 
-  patients       Patient[]
   staff          HospitalStaff[]
-  ngos           NGO[]                 @relation("HospitalNGOCollaboration")
   appointments   Appointment[]
   donationRecords DonationRecord[]
   inventories    BloodInventory[]
   stockSettings  HospitalStockSettings?
   medicalCheckups MedicalCheckup[]
-  campaigns      Campaign[]
   emergencyRequests EmergencyRequest[]
-  assistanceEnquiries AssistanceEnquiry[]
-  donationNeeds HospitalDonationNeed[]
   appointmentSlots AppointmentSlot[]
-}
-
-model NGO {
-  ngoId       Int      @id @default(autoincrement())
-  name        String
-  location    String
-  contactInfo String
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-
-  users     NGOUser[]
-  hospitals Hospital[] @relation("HospitalNGOCollaboration")
-  campaigns Campaign[]
-  outreachActivities OutreachActivity[]
-}
-
-model NGOUser {
-  ngoUserId Int @id @default(autoincrement())
-  userId    Int @unique
-  user      User @relation(fields: [userId], references: [userId], onDelete: Cascade)
-
-  ngoId Int
-  ngo   NGO @relation(fields: [ngoId], references: [ngoId], onDelete: Cascade)
-
-  createdByAdminId Int?
-  createdByAdmin   Admin? @relation("AdminCreatesNGOUsers", fields: [createdByAdminId], references: [adminId], onDelete: SetNull)
-
-  createdAt DateTime @default(now())
-
-  createdCampaigns Campaign[] @relation("NGOUserCreatesCampaigns")
-  createdOutreachActivities OutreachActivity[] @relation("NGOUserCreatesOutreachActivities")
 }
 
 model HospitalStaff {
@@ -182,8 +111,6 @@ model HospitalStaff {
   donationRecords DonationRecord[]
   medicalCheckups MedicalCheckup[]
   createdEmergencyRequests EmergencyRequest[] @relation("StaffCreatesEmergencyRequests")
-  reviewedAssistanceEnquiries AssistanceEnquiry[] @relation("StaffReviewsAssistanceEnquiries")
-  createdHospitalDonationNeeds HospitalDonationNeed[]
   verifiedHospitalLocations Hospital[] @relation("HospitalLocationVerifier")
   createdAppointmentSlots AppointmentSlot[]
 }
@@ -224,9 +151,6 @@ updatedAt DateTime @default(now()) @updatedAt
 
   donorId Int?
   donor   Donor? @relation(fields: [donorId], references: [donorId], onDelete: SetNull)
-
-  patientId Int?
-  patient   Patient? @relation(fields: [patientId], references: [patientId], onDelete: SetNull)
 
   hospitalId Int?
   hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
@@ -347,8 +271,7 @@ model EmergencyRequest {
 updatedAt DateTime @default(now()) @updatedAt
 
 
-  patientId Int?
-  patient   Patient? @relation(fields: [patientId], references: [patientId], onDelete: SetNull)
+  patientReference String? @db.VarChar(60)
 
   hospitalId Int?
   hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
@@ -364,87 +287,6 @@ updatedAt DateTime @default(now()) @updatedAt
   alerts                Alert[]
   notifications         Notification[]
   inventoryTransactions InventoryTransaction[]
-  assistanceEnquiry AssistanceEnquiry? @relation("EnquiryCreatesRequest")
-
-  @@index([hospitalId, status, neededBy])
-}
-
-model PatientAccess {
-  accessId     Int      @id @default(autoincrement())
-  status       String   @default("PENDING")
-  relationship String
-  grantedAt    DateTime?
-  revokedAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @default(now()) @updatedAt
-
-  patientId Int
-  patient   Patient @relation("PatientAccessPatient", fields: [patientId], references: [patientId], onDelete: Cascade)
-
-  userId Int
-  user   User @relation("PatientAccessGrantee", fields: [userId], references: [userId], onDelete: Cascade)
-
-  grantedByUserId Int?
-  grantedByUser   User? @relation("PatientAccessGrantor", fields: [grantedByUserId], references: [userId], onDelete: SetNull)
-
-  @@unique([patientId, userId])
-  @@index([userId, status])
-}
-
-model AssistanceEnquiry {
-  enquiryId       Int      @id @default(autoincrement())
-  description     String
-  status          String   @default("PENDING_HOSPITAL_VERIFICATION")
-  submitterName   String?
-  submitterEmail  String?
-  submitterPhone  String?
-  requestedBloodType String?
-  quantityRequired Int?
-  urgencyLevel    String?
-  neededBy        DateTime?
-  latitude        Float?
-  longitude       Float?
-  reviewNotes     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
-  reviewedAt      DateTime?
-
-  submittingUserId Int?
-  submittingUser   User? @relation("UserSubmitsAssistanceEnquiries", fields: [submittingUserId], references: [userId], onDelete: SetNull)
-
-  patientId Int
-  patient   Patient @relation(fields: [patientId], references: [patientId], onDelete: Restrict)
-
-  preferredHospitalId Int?
-  preferredHospital   Hospital? @relation(fields: [preferredHospitalId], references: [hospitalId], onDelete: SetNull)
-
-  reviewedByStaffId Int?
-  reviewedByStaff   HospitalStaff? @relation("StaffReviewsAssistanceEnquiries", fields: [reviewedByStaffId], references: [staffId], onDelete: SetNull)
-
-  resultingRequestId Int? @unique
-  resultingRequest   EmergencyRequest? @relation("EnquiryCreatesRequest", fields: [resultingRequestId], references: [requestId], onDelete: SetNull)
-
-  @@index([status, preferredHospitalId, createdAt])
-}
-
-model HospitalDonationNeed {
-  needId          Int      @id @default(autoincrement())
-  bloodType       String
-  unitsNeeded     Int
-  neededBy        DateTime
-  notes           String?
-  status          String   @default("OPEN")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
-
-  hospitalId Int
-  hospital   Hospital @relation(fields: [hospitalId], references: [hospitalId], onDelete: Cascade)
-
-  createdByStaffId Int
-  createdByStaff   HospitalStaff @relation(fields: [createdByStaffId], references: [staffId], onDelete: Restrict)
-
-  campaigns Campaign[]
-
   @@index([hospitalId, status, neededBy])
 }
 
@@ -499,8 +341,6 @@ model Notification {
   requestId Int?
   request   EmergencyRequest? @relation(fields: [requestId], references: [requestId], onDelete: SetNull)
 
-  campaignId Int?
-  campaign   Campaign? @relation(fields: [campaignId], references: [campaignId], onDelete: SetNull)
 }
 
 model PasswordResetToken {
@@ -530,74 +370,6 @@ model EmailOutbox {
   processingAt   DateTime?
 
   @@index([status, nextAttemptAt])
-}
-
-model Campaign {
-  campaignId  Int      @id @default(autoincrement())
-  name        String
-  description String
-  startDate   DateTime
-  endDate     DateTime
-  location    String
-  status      String   @default("PLANNED")
-  createdAt   DateTime @default(now())
-
-  createdByAdminId Int?
-  createdByAdmin   Admin? @relation(fields: [createdByAdminId], references: [adminId], onDelete: Restrict)
-
-  createdByNgoUserId Int?
-  createdByNgoUser   NGOUser? @relation("NGOUserCreatesCampaigns", fields: [createdByNgoUserId], references: [ngoUserId], onDelete: SetNull)
-
-  ngoId Int?
-  ngo   NGO? @relation(fields: [ngoId], references: [ngoId], onDelete: SetNull)
-
-  hospitalId Int?
-  hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
-
-  hospitalNeedId Int?
-  hospitalNeed   HospitalDonationNeed? @relation(fields: [hospitalNeedId], references: [needId], onDelete: SetNull)
-
-  donorRegistrations CampaignRegistration[]
-  outreachActivities OutreachActivity[]
-  notifications      Notification[]
-}
-
-model OutreachActivity {
-  activityId   Int      @id @default(autoincrement())
-  title        String
-  activityType String
-  description  String
-  location     String
-  scheduledAt  DateTime
-  status       String   @default("PLANNED")
-  peopleReached Int     @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @default(now()) @updatedAt
-
-  ngoId Int
-  ngo   NGO @relation(fields: [ngoId], references: [ngoId], onDelete: Cascade)
-
-  campaignId Int?
-  campaign   Campaign? @relation(fields: [campaignId], references: [campaignId], onDelete: SetNull)
-
-  createdByNgoUserId Int?
-  createdByNgoUser   NGOUser? @relation("NGOUserCreatesOutreachActivities", fields: [createdByNgoUserId], references: [ngoUserId], onDelete: SetNull)
-
-  @@index([ngoId, scheduledAt])
-}
-
-model CampaignRegistration {
-  registrationId Int      @id @default(autoincrement())
-  status         String   @default("REGISTERED")
-  registeredAt   DateTime @default(now())
-
-  donorId Int
-  donor   Donor @relation(fields: [donorId], references: [donorId], onDelete: Cascade)
-
-  campaignId Int
-  campaign   Campaign @relation(fields: [campaignId], references: [campaignId], onDelete: Cascade)
-
-  @@unique([campaignId, donorId])
 }
 
 model AuditLog {

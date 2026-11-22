@@ -23,11 +23,7 @@ async function main() {
   await prisma.emergencyRequest.deleteMany();
   await prisma.appointment.deleteMany();
   await prisma.hospitalStaff.deleteMany();
-  await prisma.nGOUser.deleteMany();
   await prisma.donor.deleteMany();
-  await prisma.patient.deleteMany();
-  await prisma.campaign.deleteMany();
-  await prisma.nGO.deleteMany();
   await prisma.hospital.deleteMany();
 
   // Admin depends on User, so delete Admin first
@@ -123,86 +119,7 @@ async function main() {
   console.log(`✓ ${hospitals.length} hospitals created`);
 
   // ---------------------------------------------------------
-  // 4. NGOs
-  // ---------------------------------------------------------
-
-  const ngos = await Promise.all([
-    prisma.nGO.create({
-      data: {
-        name: "Kenya Red Cross",
-        location: "South C, Nairobi",
-        contactInfo: "0700395395",
-      },
-    }),
-
-    prisma.nGO.create({
-      data: {
-        name: "Nairobi Community Blood Initiative",
-        location: "Westlands, Nairobi",
-        contactInfo: "0712345678",
-      },
-    }),
-  ]);
-
-  console.log(`✓ ${ngos.length} NGOs created`);
-
-  // ---------------------------------------------------------
-  // 5. HOSPITAL ↔ NGO RELATIONSHIP
-  // ---------------------------------------------------------
-
-  for (const hospital of hospitals) {
-    for (const ngo of ngos) {
-      await prisma.hospital.update({
-        where: {
-          hospitalId: hospital.hospitalId,
-        },
-        data: {
-          ngos: {
-            connect: {
-              ngoId: ngo.ngoId,
-            },
-          },
-        },
-      });
-    }
-  }
-
-  console.log("✓ Hospital-NGO collaborations created");
-
-  // ---------------------------------------------------------
-  // 6. NGO USERS
-  // ---------------------------------------------------------
-
-  const ngoUsers = [];
-
-  for (let i = 0; i < ngos.length; i++) {
-    const ngoUserAccount = await prisma.user.create({
-      data: {
-        firstName: "NGO",
-        lastName: `User${i + 1}`,
-        email: `ngo${i + 1}@hemoconnect.co.ke`,
-        phone: `07300000${String(i + 1).padStart(2, "0")}`,
-        password: hashedPassword,
-        role: "NGO",
-        status: "ACTIVE",
-      },
-    });
-
-    const ngoUser = await prisma.nGOUser.create({
-      data: {
-        userId: ngoUserAccount.userId,
-        ngoId: ngos[i].ngoId,
-        createdByAdminId: admin.adminId,
-      },
-    });
-
-    ngoUsers.push(ngoUser);
-  }
-
-  console.log(`✓ ${ngoUsers.length} NGO users created`);
-
-  // ---------------------------------------------------------
-  // 7. HOSPITAL STAFF
+  // 4. HOSPITAL STAFF
   // ---------------------------------------------------------
 
   const staffNames = [
@@ -252,74 +169,6 @@ async function main() {
   }
 
   console.log(`✓ ${hospitalStaff.length} hospital staff created`);
-
-  // ---------------------------------------------------------
-  // 8. PATIENTS
-  // ---------------------------------------------------------
-
-  const patientsData = [
-    ["James", "Kamau", "O+", "0711000001", "Male"],
-    ["Mary", "Wanjiku", "A+", "0711000002", "Female"],
-    ["David", "Otieno", "B+", "0711000003", "Male"],
-    ["Grace", "Achieng", "O-", "0711000004", "Female"],
-    ["Peter", "Mwangi", "AB+", "0711000005", "Male"],
-    ["Sarah", "Njeri", "A-", "0711000006", "Female"],
-    ["Samuel", "Kiptoo", "O+", "0711000007", "Male"],
-    ["Anne", "Wambui", "B-", "0711000008", "Female"],
-    ["Michael", "Ochieng", "O+", "0711000009", "Male"],
-    ["Catherine", "Nyambura", "A+", "0711000010", "Female"],
-    ["Onyx", "Courtney", "A+", "0745273570", "Male"],
-  ];
-
-  const patients = [];
-
-  for (let i = 0; i < patientsData.length; i++) {
-    const [firstName, lastName, bloodType, phone, gender] =
-      patientsData[i];
-
-    // Create User account for patient
-    const patientUser = await prisma.user.create({
-      data: {
-        firstName,
-        lastName,
-        email: `patient${i + 1}@hemoconnect.co.ke`,
-        phone,
-        password: hashedPassword,
-        role: "PATIENT",
-        status: "ACTIVE",
-      },
-    });
-
-    // Create Patient profile linked to the User
-    const patient = await prisma.patient.create({
-      data: {
-        userId: patientUser.userId,
-        firstName,
-        lastName,
-        bloodType,
-        address:
-          [
-            "Westlands",
-            "Kasarani",
-            "Embakasi",
-            "Lang'ata",
-            "Dagoretti",
-          ][i % 5] + ", Nairobi",
-        phone,
-        birthDate: new Date(
-          1985 + (i % 15),
-          i % 12,
-          10 + (i % 15)
-        ),
-        gender,
-        hospitalId: hospitals[i % hospitals.length].hospitalId,
-      },
-    });
-
-    patients.push(patient);
-  }
-
-  console.log(`✓ ${patients.length} patients created`);
 
   // ---------------------------------------------------------
   // 9. DONORS
@@ -420,7 +269,6 @@ async function main() {
         purpose: i % 3 === 0 ? "Blood Donation" : "Blood Test",
         status: i % 4 === 0 ? "COMPLETED" : "SCHEDULED",
         donorId: donors[i % donors.length].donorId,
-        patientId: patients[i % patients.length].patientId,
       },
     });
 
@@ -523,7 +371,6 @@ async function main() {
         neededBy: new Date(
           Date.now() + (i + 1) * 24 * 60 * 60 * 1000
         ),
-        patientId: patients[i].patientId,
       },
     });
 
@@ -574,61 +421,13 @@ async function main() {
   console.log("✓ Alerts created");
 
   // ---------------------------------------------------------
-  // 16. CAMPAIGNS
-  // ---------------------------------------------------------
-
-  const campaigns = [
-    {
-      name: "Nairobi Blood Drive 2026",
-      description:
-        "Community blood donation campaign across Nairobi.",
-      startDate: new Date("2026-10-01"),
-      endDate: new Date("2026-10-07"),
-      location: "Nairobi CBD",
-      status: "ACTIVE",
-    },
-
-    {
-      name: "Save a Life Campaign",
-      description:
-        "Blood donation awareness and recruitment campaign.",
-      startDate: new Date("2026-10-10"),
-      endDate: new Date("2026-10-20"),
-      location: "Westlands",
-      status: "PLANNED",
-    },
-
-    {
-      name: "University Blood Drive",
-      description:
-        "Student-focused blood donation campaign.",
-      startDate: new Date("2026-11-01"),
-      endDate: new Date("2026-11-05"),
-      location: "Nairobi",
-      status: "PLANNED",
-    },
-  ];
-
-  for (const campaign of campaigns) {
-    await prisma.campaign.create({
-      data: {
-        ...campaign,
-        createdByAdminId: admin.adminId,
-      },
-    });
-  }
-
-  console.log(`✓ ${campaigns.length} campaigns created`);
-
   // ---------------------------------------------------------
   // SUMMARY
   // ---------------------------------------------------------
 
   const totalUsers =
     1 +
-    ngoUsers.length +
     hospitalStaff.length +
-    patients.length +
     donors.length;
 
   console.log("\n========================================");
@@ -637,16 +436,12 @@ async function main() {
   console.log(`Admin:                 1`);
   console.log(`User accounts:         ${totalUsers}`);
   console.log(`Hospitals:             ${hospitals.length}`);
-  console.log(`NGOs:                  ${ngos.length}`);
-  console.log(`NGO Users:             ${ngoUsers.length}`);
   console.log(`Hospital Staff:        ${hospitalStaff.length}`);
-  console.log(`Patients:              ${patients.length}`);
   console.log(`Donors:                ${donors.length}`);
   console.log(`Appointments:          ${appointments.length}`);
   console.log(`Donation Records:      ${donationRecords.length}`);
   console.log(`Emergency Requests:    ${emergencyRequests.length}`);
   console.log(`Alerts:                ${emergencyRequests.length}`);
-  console.log(`Campaigns:             ${campaigns.length}`);
   console.log("========================================\n");
 
   console.log("Development login password for all seeded accounts:");
