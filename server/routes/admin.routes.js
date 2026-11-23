@@ -1,5 +1,5 @@
 const express = require("express");
-const { body, param } = require("express-validator");
+const { body, param, query } = require("express-validator");
 
 const {
 	getAdminDashboard,
@@ -42,7 +42,14 @@ router.post(
 	validate,
 	createAdminHospitalStaff
 );
-router.get("/hospitals", authenticate, authorize("ADMIN"), listAdminHospitals);
+router.get(
+	"/hospitals",
+	authenticate,
+	authorize("ADMIN"),
+	query("institutionType").optional({ values: "falsy" }).isIn(["HOSPITAL", "KNBTS_CENTRE"]).withMessage("Select a valid institution type."),
+	validate,
+	listAdminHospitals
+);
 router.post(
 	"/hospitals",
 	authenticate,
@@ -52,6 +59,7 @@ router.post(
 	body("contactInfo").trim().isLength({ min: 3, max: 100 }).withMessage("Enter hospital contact details."),
 	body("latitude").isFloat({ min: -90, max: 90 }).withMessage("Enter a valid latitude.").toFloat(),
 	body("longitude").isFloat({ min: -180, max: 180 }).withMessage("Enter a valid longitude.").toFloat(),
+	body("institutionType").optional().isIn(["HOSPITAL", "KNBTS_CENTRE"]).withMessage("Select a valid institution type."),
 	validate,
 	createAdminHospital
 );

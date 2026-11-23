@@ -199,7 +199,10 @@ describe("Hospital staff operations and authorization", () => {
 
   it("prevents staff from viewing or changing another hospital's request", async () => {
     const otherHospital = await prisma.hospital.findFirst({
-      where: { hospitalId: { not: staffUser.hospitalStaff.hospitalId } },
+      where: {
+        hospitalId: { not: staffUser.hospitalStaff.hospitalId },
+        institutionType: "HOSPITAL",
+      },
       select: { hospitalId: true },
     });
     if (!otherHospital) return;

@@ -12,6 +12,7 @@ const EMPTY_HOSPITAL = {
   contactInfo: "",
   latitude: "",
   longitude: "",
+  institutionType: "HOSPITAL",
 };
 
 function formatDate(value) {
@@ -25,7 +26,8 @@ function formatDate(value) {
 function Hospitals() {
   const [searchInput, setSearchInput] = useState("");
   const [statusInput, setStatusInput] = useState("");
-  const [filters, setFilters] = useState({ search: "", status: "" });
+  const [institutionTypeInput, setInstitutionTypeInput] = useState("");
+  const [filters, setFilters] = useState({ search: "", status: "", institutionType: "" });
   const [page, setPage] = useState(1);
   const [refreshKey, setRefreshKey] = useState(0);
   const [hospitals, setHospitals] = useState([]);
@@ -51,7 +53,7 @@ function Hospitals() {
         if (cancelled) return;
         setError(
           requestError.response?.data?.message ||
-            "Unable to load hospitals. Please try again."
+            "Unable to load institutions. Please try again."
         );
       })
       .finally(() => {
@@ -69,7 +71,11 @@ function Hospitals() {
     setPage(1);
     setError("");
     setNotice("");
-    setFilters({ search: searchInput.trim(), status: statusInput });
+    setFilters({
+      search: searchInput.trim(),
+      status: statusInput,
+      institutionType: institutionTypeInput,
+    });
   }
 
   function clearFilters() {
@@ -78,8 +84,9 @@ function Hospitals() {
     setNotice("");
     setSearchInput("");
     setStatusInput("");
+    setInstitutionTypeInput("");
     setPage(1);
-    setFilters({ search: "", status: "" });
+    setFilters({ search: "", status: "", institutionType: "" });
   }
 
   async function toggleStatus(hospital) {
@@ -96,7 +103,7 @@ function Hospitals() {
     } catch (requestError) {
       setError(
         requestError.response?.data?.message ||
-          "Unable to update this hospital. Please try again."
+          "Unable to update this institution. Please try again."
       );
     } finally {
       setUpdatingHospitalId(null);
@@ -116,17 +123,18 @@ function Hospitals() {
         longitude: Number(hospitalForm.longitude),
       });
       setHospitalForm(EMPTY_HOSPITAL);
-      setNotice(`${response.data.hospital.name} was added to the hospital directory.`);
-      setFilters({ search: "", status: "" });
+      setNotice(`${response.data.hospital.name} was added to the institution directory.`);
+      setFilters({ search: "", status: "", institutionType: "" });
       setSearchInput("");
       setStatusInput("");
+      setInstitutionTypeInput("");
       setPage(1);
       setLoading(true);
       setRefreshKey((value) => value + 1);
     } catch (requestError) {
       setError(
         requestError.response?.data?.message ||
-          "Unable to add this hospital. Please verify the details and try again."
+          "Unable to add this institution. Please verify the details and try again."
       );
     } finally {
       setCreatingHospital(false);
@@ -140,21 +148,36 @@ function Hospitals() {
     <section className="admin-hospitals-page" aria-labelledby="hospitals-heading">
       <header className="admin-hospitals-heading">
         <div>
-          <h1 id="hospitals-heading">Hospitals</h1>
-          <p>Review hospital contact details and platform access.</p>
+          <h1 id="hospitals-heading">Institutions</h1>
+          <p>Review hospitals and KNBTS centre access.</p>
         </div>
-        <span className="admin-hospitals-count">{pagination.total} hospitals</span>
+        <span className="admin-hospitals-count">{pagination.total} institutions</span>
       </header>
 
       {error && <div className="admin-hospitals-message error" role="alert">{error}</div>}
       {notice && <div className="admin-hospitals-message success" role="status">{notice}</div>}
 
       <form className="admin-hospital-create-form" onSubmit={createHospital}>
-        <h2>Add a hospital</h2>
-        <p>Register a participating hospital with a verified permanent map pin. Active hospitals with coordinates can appear in nearby search and receive appointment bookings.</p>
+        <h2>Add an institution</h2>
+        <p>
+          {hospitalForm.institutionType === "KNBTS_CENTRE"
+            ? "Register a KNBTS blood collection centre with a verified permanent map pin."
+            : "Register a participating hospital with a verified permanent map pin. Active hospitals can appear in nearby search and receive appointment bookings."}
+        </p>
         <div className="admin-hospital-create-fields">
           <label>
-            Hospital name
+            Institution type
+            <select
+              value={hospitalForm.institutionType}
+              onChange={(event) => setHospitalForm({ ...hospitalForm, institutionType: event.target.value })}
+              required
+            >
+              <option value="HOSPITAL">Hospital</option>
+              <option value="KNBTS_CENTRE">KNBTS centre</option>
+            </select>
+          </label>
+          <label>
+            Institution name
             <input
               value={hospitalForm.name}
               onChange={(event) => setHospitalForm({ ...hospitalForm, name: event.target.value })}
@@ -195,15 +218,15 @@ function Hospitals() {
         <div className="admin-hospital-coordinate-fields">
           <label>
             Latitude
-            <input value={hospitalForm.latitude} readOnly required aria-label="Selected hospital latitude" />
+            <input value={hospitalForm.latitude} readOnly required aria-label="Selected institution latitude" />
           </label>
           <label>
             Longitude
-            <input value={hospitalForm.longitude} readOnly required aria-label="Selected hospital longitude" />
+            <input value={hospitalForm.longitude} readOnly required aria-label="Selected institution longitude" />
           </label>
         </div>
         <button type="submit" className="primary-button" disabled={creatingHospital || !hospitalForm.latitude || !hospitalForm.longitude}>
-          {creatingHospital ? "Adding hospital..." : "Add hospital to directory"}
+          {creatingHospital ? "Adding institution..." : "Add institution to directory"}
         </button>
       </form>
 
@@ -215,8 +238,17 @@ function Hospitals() {
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
             placeholder="Search name, location, or contact"
-            aria-label="Search hospitals"
+            aria-label="Search institutions"
           />
+        </label>
+
+        <label>
+          <span className="sr-only">Filter by institution type</span>
+          <select value={institutionTypeInput} onChange={(event) => setInstitutionTypeInput(event.target.value)}>
+            <option value="">All institution types</option>
+            <option value="HOSPITAL">Hospital</option>
+            <option value="KNBTS_CENTRE">KNBTS centre</option>
+          </select>
         </label>
 
         <label>
@@ -241,24 +273,26 @@ function Hospitals() {
         <table className="admin-hospitals-table">
           <thead>
             <tr>
-              <th scope="col">Hospital</th>
+              <th scope="col">Institution</th>
+              <th scope="col">Type</th>
               <th scope="col">Location</th>
               <th scope="col">Contact</th>
               <th scope="col">Added</th>
               <th scope="col">Status</th>
-              <th scope="col"><span className="sr-only">Hospital action</span></th>
+              <th scope="col"><span className="sr-only">Institution action</span></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan="6" className="admin-hospitals-empty">Loading hospitals...</td></tr>
+              <tr><td colSpan="7" className="admin-hospitals-empty">Loading institutions...</td></tr>
             ) : hospitals.length === 0 ? (
-              <tr><td colSpan="6" className="admin-hospitals-empty">No hospitals match these filters.</td></tr>
+              <tr><td colSpan="7" className="admin-hospitals-empty">No institutions match these filters.</td></tr>
             ) : hospitals.map((hospital) => (
               <tr key={hospital.hospitalId}>
                 <td>
                   <strong><Building2 size={15} aria-hidden="true" />{hospital.name}</strong>
                 </td>
+                <td>{hospital.institutionType === "KNBTS_CENTRE" ? "KNBTS centre" : "Hospital"}</td>
                 <td>{hospital.location}</td>
                 <td>{hospital.contactInfo}</td>
                 <td>{formatDate(hospital.createdAt)}</td>

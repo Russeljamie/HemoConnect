@@ -33,7 +33,7 @@ function ProtectedRoute({ children, requiredRole, allowPasswordChange = false })
 
 function PublicRoute({ children }) {
   if (isAuthenticated()) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={getDashboardPath(getCurrentUser()?.role)} replace />;
   }
 
   return children;
@@ -97,6 +97,15 @@ function AppRoutes() {
         path="/hospital-dashboard"
         element={
           <ProtectedRoute>
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/knbts-dashboard"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
             <App />
           </ProtectedRoute>
         }

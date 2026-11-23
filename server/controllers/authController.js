@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
 const { enqueueEmail, isEmailConfigured } = require("../services/email");
+const { isActiveKnbtsCentre } = require("../utils/institution");
 
 const register = async (req, res, next) => {
   try {
@@ -129,6 +130,24 @@ const login = async (req, res, next) => {
         success: false,
         message: "Your account is not active",
       });
+    }
+
+    if (user.role === "KNBTS_STAFF") {
+      const staffProfile = await prisma.knbtsStaff.findUnique({
+        where: { userId: user.userId },
+        select: {
+          centre: {
+            select: { institutionType: true, isActive: true },
+          },
+        },
+      });
+
+      if (!staffProfile || !isActiveKnbtsCentre(staffProfile.centre)) {
+        return res.status(403).json({
+          success: false,
+          message: "KNBTS staff must be linked to an active KNBTS centre.",
+        });
+      }
     }
 
     const token = jwt.sign(

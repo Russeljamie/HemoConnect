@@ -160,6 +160,7 @@ describe("Role-based access control", () => {
 
   it("allows an admin to change a hospital's status", async () => {
     const hospital = await prisma.hospital.findFirst({
+      where: { institutionType: "HOSPITAL" },
       select: { hospitalId: true, isActive: true },
     });
 

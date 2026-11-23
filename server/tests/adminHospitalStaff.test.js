@@ -13,7 +13,10 @@ describe("Admin hospital staff account management", () => {
   beforeAll(async () => {
     [adminUser, hospital] = await Promise.all([
       prisma.user.findFirst({ where: { role: "ADMIN", status: "ACTIVE" } }),
-      prisma.hospital.findFirst({ where: { isActive: true }, orderBy: { hospitalId: "asc" } }),
+      prisma.hospital.findFirst({
+        where: { isActive: true, institutionType: "HOSPITAL" },
+        orderBy: { hospitalId: "asc" },
+      }),
     ]);
     adminToken = jwt.sign(
       { userId: adminUser.userId, role: adminUser.role },

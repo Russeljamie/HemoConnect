@@ -1,9 +1,17 @@
+require("dotenv").config({ quiet: true });
+
+const { assertSeedDatabaseAllowed } = require("../scripts/test-db-safety");
+try {
+  assertSeedDatabaseAllowed();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+
 const { PrismaClient } = require("../generated/prisma");
 const { PrismaPg } = require("@prisma/adapter-pg");
-const bcrypt = require("bcryptjs");
 const { generateBirthDateForAge } = require("./seedUtils");
-
-require("dotenv").config();
+const { ensureKnbtsDemoAccounts, hashDemoPassword } = require("./knbtsDemoAccounts");
 
 const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL,
@@ -23,7 +31,9 @@ async function main() {
   await prisma.emergencyRequest.deleteMany();
   await prisma.appointment.deleteMany();
   await prisma.hospitalStaff.deleteMany();
+  await prisma.knbtsStaff.deleteMany();
   await prisma.donor.deleteMany();
+  await prisma.hospital.deleteMany({ where: { institutionType: "KNBTS_CENTRE" } });
   await prisma.hospital.deleteMany();
 
   // Admin depends on User, so delete Admin first
@@ -36,7 +46,7 @@ async function main() {
   // 2. USER ACCOUNTS + ADMIN
   // ---------------------------------------------------------
 
-  const hashedPassword = await bcrypt.hash("Password123!", 10);
+  const hashedPassword = await hashDemoPassword();
 
   // Create the admin's User account first
   const adminUser = await prisma.user.create({
@@ -117,6 +127,10 @@ async function main() {
   ]);
 
   console.log(`✓ ${hospitals.length} hospitals created`);
+  const { centre: knbtsCentre, staffProfiles: knbtsStaff } =
+    await ensureKnbtsDemoAccounts(prisma, hashedPassword);
+  console.log(`✓ KNBTS centre ready: ${knbtsCentre.name}`);
+  console.log(`✓ ${knbtsStaff.length} KNBTS staff profiles ready`);
 
   // ---------------------------------------------------------
   // 4. HOSPITAL STAFF
@@ -428,6 +442,7 @@ async function main() {
   const totalUsers =
     1 +
     hospitalStaff.length +
+    knbtsStaff.length +
     donors.length;
 
   console.log("\n========================================");
@@ -437,6 +452,7 @@ async function main() {
   console.log(`User accounts:         ${totalUsers}`);
   console.log(`Hospitals:             ${hospitals.length}`);
   console.log(`Hospital Staff:        ${hospitalStaff.length}`);
+  console.log(`KNBTS Staff:           ${knbtsStaff.length}`);
   console.log(`Donors:                ${donors.length}`);
   console.log(`Appointments:          ${appointments.length}`);
   console.log(`Donation Records:      ${donationRecords.length}`);
@@ -444,14 +460,12 @@ async function main() {
   console.log(`Alerts:                ${emergencyRequests.length}`);
   console.log("========================================\n");
 
-  console.log("Development login password for all seeded accounts:");
-  console.log("Password123!");
 }
 
 main()
   .catch((error) => {
-    console.error("❌ Seed failed:");
-    console.error(error);
+    console.error("Seed failed; details suppressed to protect connection credentials.");
+    if (error && error.code) console.error(`Error code: ${error.code}`);
     process.exit(1);
   })
   .finally(async () => {

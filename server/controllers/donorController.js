@@ -354,7 +354,12 @@ const listDonorAppointments = async (req, res, next) => {
         orderBy: [{ date: "desc" }, { time: "desc" }],
       }),
       prisma.hospital.findMany({
-        where: { isActive: true, latitude: { not: null }, longitude: { not: null } },
+        where: {
+          isActive: true,
+          institutionType: "HOSPITAL",
+          latitude: { not: null },
+          longitude: { not: null },
+        },
         select: { hospitalId: true, name: true, location: true },
         orderBy: { name: "asc" },
       }),
@@ -408,6 +413,7 @@ const listNearbyDonorHospitals = async (req, res, next) => {
     const hospitals = await prisma.hospital.findMany({
       where: {
         isActive: true,
+        institutionType: "HOSPITAL",
         latitude: { not: null },
         longitude: { not: null },
       },
@@ -458,7 +464,12 @@ const listDonorAppointmentSlots = async (req, res, next) => {
         hospitalId,
         status: "OPEN",
         slotDate: { gte: today },
-        hospital: { isActive: true, latitude: { not: null }, longitude: { not: null } },
+        hospital: {
+          isActive: true,
+          institutionType: "HOSPITAL",
+          latitude: { not: null },
+          longitude: { not: null },
+        },
       },
       select: {
         slotId: true,
@@ -516,6 +527,7 @@ const createDonorAppointment = async (req, res, next) => {
       prisma.hospital.findMany({
         where: {
           isActive: true,
+          institutionType: "HOSPITAL",
           latitude: { not: null },
           longitude: { not: null },
         },
@@ -576,7 +588,12 @@ const createDonorAppointment = async (req, res, next) => {
           hospitalId,
           status: "OPEN",
           slotDate: { gte: startOfUtcDay(new Date()) },
-          hospital: { isActive: true, latitude: { not: null }, longitude: { not: null } },
+          hospital: {
+            isActive: true,
+            institutionType: "HOSPITAL",
+            latitude: { not: null },
+            longitude: { not: null },
+          },
         },
         select: { slotDate: true },
       });

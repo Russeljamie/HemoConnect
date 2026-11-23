@@ -22,7 +22,9 @@ import {
   adminAPI,
   donorAPI,
   getCurrentUser,
+  getDashboardPath,
   hospitalAPI,
+  knbtsAPI,
   logout,
   notificationsAPI,
 } from "./services/api";
@@ -113,6 +115,13 @@ const roleConfig = {
     ctaAction: "Inventory",
     bloodBadge: "Inventory",
   },
+  KNBTS_STAFF: {
+    title: "KNBTS Centre",
+    subtitle: "Blood collection centre account.",
+    welcome: "Welcome",
+    nav: [{ label: "Dashboard", icon: LayoutDashboard }],
+    stats: [],
+  },
   ADMIN: {
     title: "Admin Dashboard",
     subtitle: "Platform oversight and controls.",
@@ -120,7 +129,7 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "Users", icon: Users },
-      { label: "Hospitals", icon: Building2 },
+      { label: "Institutions", icon: Building2 },
       { label: "Inventory", icon: Droplet },
       { label: "Reports", icon: ClipboardList },
     ],
@@ -160,6 +169,8 @@ function App() {
   const [globalNotifications, setGlobalNotifications] = useState([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [hospitalProfile, setHospitalProfile] = useState(null);
+  const [knbtsProfile, setKnbtsProfile] = useState(null);
+  const [knbtsProfileLoading, setKnbtsProfileLoading] = useState(false);
   const [adminDashboard, setAdminDashboard] = useState(null);
 
   const user = getCurrentUser() || {};
@@ -232,6 +243,24 @@ function App() {
           setMessage("Unable to load hospital staff details. Please try again later.");
         });
       return;
+    }
+
+    if (role === "KNBTS_STAFF") {
+      let cancelled = false;
+      setKnbtsProfileLoading(true);
+      knbtsAPI.getProfile()
+        .then((response) => {
+          if (!cancelled) setKnbtsProfile(response?.data?.staff || null);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setMessage(error.response?.data?.message || "Unable to load KNBTS centre details.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setKnbtsProfileLoading(false);
+        });
+      return () => { cancelled = true; };
     }
 
     if (role === "ADMIN") {
@@ -397,7 +426,7 @@ function App() {
   const activeNavigationLabel = donorPage?.label || hospitalPageLabel || (isAdminUsersPage
     ? "Users"
     : isAdminHospitalsPage
-      ? "Hospitals"
+      ? "Institutions"
     : isAdminInventoryPage ? "Inventory" : "Dashboard");
 
   function handleLogout() {
@@ -452,7 +481,7 @@ function App() {
       return;
     }
 
-    if (role === "ADMIN" && label === "Hospitals") {
+    if (role === "ADMIN" && label === "Institutions") {
       setMessage("");
       navigate("/admin/hospitals");
       return;
@@ -466,7 +495,7 @@ function App() {
 
     if (label === "Dashboard") {
       setMessage("");
-      navigate(role === "ADMIN" ? "/admin-dashboard" : "/dashboard");
+      navigate(getDashboardPath(role));
       return;
     }
 
@@ -693,7 +722,7 @@ function App() {
                           : isAdminUsersPage
                             ? "User Accounts"
                             : isAdminHospitalsPage
-                              ? "Hospital Directory"
+                              ? "Institution Directory"
                               : isAdminInventoryPage ? "Blood Inventory" : effectiveRole.title)}
               </div>
               <div className="page-subtitle">
@@ -710,7 +739,7 @@ function App() {
                           : isAdminUsersPage
                             ? "Manage platform account access."
                             : isAdminHospitalsPage
-                              ? "Review hospital access and contact details."
+                              ? "Review hospitals and KNBTS centre access."
                               : isAdminInventoryPage ? "Monitor stock levels across the hospital network." : effectiveRole.subtitle)}
               </div>
             </div>
@@ -801,7 +830,21 @@ function App() {
             </div>
           )}
 
-          {role === "DONOR" && !donorPage && donorDashboardLoading ? (
+          {role === "KNBTS_STAFF" ? (
+            knbtsProfileLoading ? (
+              <div className="donor-page-state" role="status">Loading centre profile...</div>
+            ) : (
+              <section className="dashboard-card knbts-landing-card" aria-labelledby="knbts-centre-heading">
+                <h1 id="knbts-centre-heading">{knbtsProfile?.centre?.name || "KNBTS Centre"}</h1>
+                <p className="knbts-landing-designation">{knbtsProfile?.designation || "KNBTS staff"}</p>
+                <p>More centre features are coming soon.</p>
+                <button type="button" className="primary-button" onClick={handleLogout}>
+                  <LogOut size={18} />
+                  Logout
+                </button>
+              </section>
+            )
+          ) : role === "DONOR" && !donorPage && donorDashboardLoading ? (
             <div className="donor-page-state" role="status">Loading your dashboard...</div>
           ) : role === "DONOR" && donorPage ? (
             donorPageContent

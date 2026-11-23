@@ -67,11 +67,12 @@ router.post(
 router.get(
   "/role-access",
   authenticate,
-  authorize("DONOR", "HOSPITAL_STAFF", "ADMIN"),
+  authorize("DONOR", "HOSPITAL_STAFF", "KNBTS_STAFF", "ADMIN"),
   (req, res) => {
     const dashboardMap = {
       DONOR: "donor-dashboard",
       HOSPITAL_STAFF: "hospital-dashboard",
+      KNBTS_STAFF: "knbts-dashboard",
       ADMIN: "admin-dashboard",
     };
 

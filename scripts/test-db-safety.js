@@ -59,6 +59,17 @@ function validateTestDatabaseUrls(testDatabaseUrl, developmentDatabaseUrl) {
   return testDatabase;
 }
 
+function assertSeedDatabaseAllowed() {
+  const { databaseName } = parseDatabaseUrl(process.env.DATABASE_URL, "Seed");
+  if (databaseName === requiredDatabaseName || process.env.HEMOCONNECT_ALLOW_DEV_SEED === "yes") {
+    return { databaseName };
+  }
+
+  throw new Error(
+    `Refusing to seed database "${databaseName}"; only "${requiredDatabaseName}" is allowed without HEMOCONNECT_ALLOW_DEV_SEED=yes.`
+  );
+}
+
 function readDevelopmentDatabaseUrl() {
   let developmentEnvironment;
   try {
@@ -131,6 +142,9 @@ if (require.main === module) {
 
 module.exports = {
   loadTestDatabase,
+  parseDatabaseUrl,
+  readDevelopmentDatabaseUrl,
+  assertSeedDatabaseAllowed,
   validateTestDatabaseUrls,
   verifyTestDatabaseExists,
 };

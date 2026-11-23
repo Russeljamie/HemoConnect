@@ -84,6 +84,7 @@ export const authAPI = {
 export const ROLE_DASHBOARDS = {
   DONOR: "/dashboard",
   HOSPITAL_STAFF: "/hospital-dashboard",
+  KNBTS_STAFF: "/knbts-dashboard",
   ADMIN: "/admin-dashboard",
 };
 
@@ -214,6 +215,13 @@ export const hospitalAPI = {
   },
   getStaff: async () => {
     const response = await api.get("/hospital/staff");
+    return response.data;
+  },
+};
+
+export const knbtsAPI = {
+  getProfile: async () => {
+    const response = await api.get("/knbts/profile");
     return response.data;
   },
 };

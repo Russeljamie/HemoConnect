@@ -8,6 +8,11 @@ datasource db {
   provider = "postgresql"
 }
 
+enum InstitutionType {
+  HOSPITAL
+  KNBTS_CENTRE
+}
+
 model User {
   userId    Int      @id @default(autoincrement())
   firstName String
@@ -26,6 +31,7 @@ updatedAt DateTime @default(now()) @updatedAt
   admin                   Admin?
   donor                   Donor?
   hospitalStaff           HospitalStaff?
+  knbtsStaff              KnbtsStaff?
   notifications           Notification[]
   alerts                  Alert[]                @relation("UserReceivesAlerts")
   auditLogs               AuditLog[]             @relation("UserAuditLogs")
@@ -76,6 +82,7 @@ model Hospital {
   name        String
   location    String
   contactInfo String
+  institutionType    InstitutionType @default(HOSPITAL)
   latitude    Float?
   longitude   Float?
   locationVerifiedAt DateTime?
@@ -88,6 +95,7 @@ updatedAt DateTime @default(now()) @updatedAt
 
 
   staff          HospitalStaff[]
+  knbtsStaff     KnbtsStaff[]
   appointments   Appointment[]
   donationRecords DonationRecord[]
   inventories    BloodInventory[]
@@ -113,6 +121,21 @@ model HospitalStaff {
   createdEmergencyRequests EmergencyRequest[] @relation("StaffCreatesEmergencyRequests")
   verifiedHospitalLocations Hospital[] @relation("HospitalLocationVerifier")
   createdAppointmentSlots AppointmentSlot[]
+}
+
+model KnbtsStaff {
+  knbtsStaffId Int      @id @default(autoincrement())
+  designation  String?
+  createdAt    DateTime @default(now())
+
+  userId Int  @unique
+  user   User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  centreId Int
+  centre   Hospital @relation(fields: [centreId], references: [hospitalId], onDelete: Restrict)
+
+  donationRecords  DonationRecord[]
+  medicalCheckups MedicalCheckup[]
 }
 
 model AppointmentSlot {
@@ -179,6 +202,9 @@ model DonationRecord {
   staffId Int?
   hospitalStaff HospitalStaff? @relation(fields: [staffId], references: [staffId], onDelete: SetNull)
 
+  recordedByKnbtsStaffId Int?
+  recordedByKnbtsStaff   KnbtsStaff? @relation(fields: [recordedByKnbtsStaffId], references: [knbtsStaffId], onDelete: SetNull)
+
   hospitalId Int?
   hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)
 
@@ -200,6 +226,9 @@ model MedicalCheckup {
 
   staffId Int?
   hospitalStaff HospitalStaff? @relation(fields: [staffId], references: [staffId], onDelete: SetNull)
+
+  recordedByKnbtsStaffId Int?
+  recordedByKnbtsStaff   KnbtsStaff? @relation(fields: [recordedByKnbtsStaffId], references: [knbtsStaffId], onDelete: SetNull)
 
   hospitalId Int?
   hospital   Hospital? @relation(fields: [hospitalId], references: [hospitalId], onDelete: SetNull)

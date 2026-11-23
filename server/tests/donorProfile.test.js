@@ -97,7 +97,7 @@ describe("Donor profile API", () => {
       select: { donorId: true },
     });
     const hospital = await prisma.hospital.findFirst({
-      where: { isActive: true },
+      where: { isActive: true, institutionType: "HOSPITAL" },
       select: { hospitalId: true },
     });
     if (!otherDonor || !hospital) return;

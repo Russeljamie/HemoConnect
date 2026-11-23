@@ -9,6 +9,7 @@ const PAGE_SIZE = 15;
 const roleLabels = {
   DONOR: "Donor",
   HOSPITAL_STAFF: "Hospital staff",
+  KNBTS_STAFF: "KNBTS staff",
   ADMIN: "Admin",
 };
 
@@ -85,7 +86,12 @@ function Users() {
 
   useEffect(() => {
     let cancelled = false;
-    adminAPI.getHospitals({ status: "ACTIVE", page: 1, pageSize: 100 })
+    adminAPI.getHospitals({
+      status: "ACTIVE",
+      institutionType: "HOSPITAL",
+      page: 1,
+      pageSize: 100,
+    })
       .then((response) => {
         if (!cancelled) setHospitals(response?.data?.hospitals || []);
       })
@@ -230,6 +236,7 @@ function Users() {
             <option value="">All roles</option>
             <option value="DONOR">Donor</option>
             <option value="HOSPITAL_STAFF">Hospital staff</option>
+            <option value="KNBTS_STAFF">KNBTS staff</option>
             <option value="ADMIN">Admin</option>
           </select>
         </label>
@@ -258,7 +265,7 @@ function Users() {
             <tr>
               <th scope="col">Account</th>
               <th scope="col">Role</th>
-              <th scope="col">Hospital</th>
+              <th scope="col">Institution</th>
               <th scope="col">Phone</th>
               <th scope="col">Created</th>
               <th scope="col">Status</th>
@@ -283,7 +290,9 @@ function Users() {
                   <td>{roleLabels[user.role] || user.role}</td>
                   <td>{user.role === "HOSPITAL_STAFF"
                     ? <>{user.hospitalStaff?.hospital?.name || "Hospital not assigned"}{user.hospitalStaff?.designation && <span>{user.hospitalStaff.designation}</span>}</>
-                    : "—"}
+                    : user.role === "KNBTS_STAFF"
+                      ? <>{user.knbtsStaff?.centre?.name || "KNBTS centre not assigned"}{user.knbtsStaff?.designation && <span>{user.knbtsStaff.designation}</span>}</>
+                      : "—"}
                   </td>
                   <td>{user.phone}</td>
                   <td>{formatDate(user.createdAt)}</td>
