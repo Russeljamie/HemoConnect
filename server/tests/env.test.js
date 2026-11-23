@@ -30,3 +30,37 @@ describe("JWT secret production configuration", () => {
     );
   });
 });
+
+describe("DONATION_WAITING_PERIOD_DAYS configuration", () => {
+  const originalWaitingPeriod = process.env.DONATION_WAITING_PERIOD_DAYS;
+
+  afterEach(() => {
+    if (originalWaitingPeriod === undefined) {
+      delete process.env.DONATION_WAITING_PERIOD_DAYS;
+    } else {
+      process.env.DONATION_WAITING_PERIOD_DAYS = originalWaitingPeriod;
+    }
+    jest.resetModules();
+  });
+
+  it("uses 90 when missing", () => {
+    delete process.env.DONATION_WAITING_PERIOD_DAYS;
+    jest.resetModules();
+    expect(require("../config/env").DONATION_WAITING_PERIOD_DAYS).toBe(90);
+  });
+
+  it("accepts a positive integer", () => {
+    process.env.DONATION_WAITING_PERIOD_DAYS = "45";
+    jest.resetModules();
+    expect(require("../config/env").DONATION_WAITING_PERIOD_DAYS).toBe(45);
+  });
+
+  it.each(["0", "-1", "1.5", "not-a-number", "", "   "])(
+    "rejects invalid value %p",
+    (value) => {
+      process.env.DONATION_WAITING_PERIOD_DAYS = value;
+      jest.resetModules();
+      expect(() => require("../config/env")).toThrow("DONATION_WAITING_PERIOD_DAYS must be a positive integer.");
+    }
+  );
+});

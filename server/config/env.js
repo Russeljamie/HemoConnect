@@ -20,6 +20,13 @@ const alertWaveRadiiKm = [
   Number(process.env.ALERT_WAVE_3_RADIUS_KM) || 30,
 ];
 
+const configuredWaitingPeriod = process.env.DONATION_WAITING_PERIOD_DAYS === undefined
+  ? 90
+  : Number(process.env.DONATION_WAITING_PERIOD_DAYS);
+if (!Number.isInteger(configuredWaitingPeriod) || configuredWaitingPeriod <= 0) {
+  throw new Error("DONATION_WAITING_PERIOD_DAYS must be a positive integer.");
+}
+
 const env = {
   PORT: Number(process.env.PORT) || 5000,
   NODE_ENV: nodeEnv,
@@ -29,6 +36,7 @@ const env = {
   CLIENT_URL: process.env.CLIENT_URL || "http://localhost:3000",
   ALERT_WAVE_RADII_KM: alertWaveRadiiKm,
   ALERT_WAVE_INTERVAL_MINUTES: Number(process.env.ALERT_WAVE_INTERVAL_MINUTES) || 30,
+  DONATION_WAITING_PERIOD_DAYS: configuredWaitingPeriod,
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: Number(process.env.SMTP_PORT) || 0,
   SMTP_SECURE: process.env.SMTP_SECURE === "true",
