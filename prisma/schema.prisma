@@ -13,6 +13,57 @@ enum InstitutionType {
   KNBTS_CENTRE
 }
 
+enum QuestionnaireVersionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum QuestionnaireAnswerType {
+  YES_NO
+  TEXT
+  DATE
+  NUMBER
+  OPTION
+  DECLARATION_ACKNOWLEDGEMENT
+  DERIVED_YES_NO
+}
+
+enum QuestionnaireSubmissionStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+enum QuestionnaireReviewDecision {
+  APPROVED
+  DECLINED
+}
+
+enum QuestionnaireClinicalDecision {
+  ACCEPT
+  DEFER
+}
+
+enum QuestionnaireApprovalStatus {
+  ACTIVE
+  CONSUMED
+  EXPIRED
+}
+
+enum QuestionnaireBookingAssociationStatus {
+  ACTIVE
+  CANCELLED_RELEASED
+  CANCELLED_EXPIRED
+  COMPLETED_CONSUMED
+}
+
+enum QuestionnaireTravelPeriodUnit {
+  MONTHS
+  YEARS
+}
+
 model User {
   userId    Int      @id @default(autoincrement())
   firstName String
@@ -69,10 +120,12 @@ updatedAt DateTime @default(now()) @updatedAt
   userId Int  @unique
   user   User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  appointments       Appointment[]
-  donationRecords    DonationRecord[]
-  medicalCheckups    MedicalCheckup[]
-  requestMatches     RequestMatch[]
+  appointments                   Appointment[]
+  donationRecords                DonationRecord[]
+  medicalCheckups                MedicalCheckup[]
+  requestMatches                 RequestMatch[]
+  questionnaireSubmissions       DonorQuestionnaireSubmission[]
+  questionnaireApprovals         QuestionnaireApproval[]
 }
 
 
@@ -134,8 +187,10 @@ model KnbtsStaff {
   centreId Int
   centre   Hospital @relation(fields: [centreId], references: [hospitalId], onDelete: Restrict)
 
-  donationRecords  DonationRecord[]
-  medicalCheckups MedicalCheckup[]
+  donationRecords              DonationRecord[]
+  medicalCheckups              MedicalCheckup[]
+  questionnaireReviews         QuestionnaireReview[]
+  questionnaireAssessments     QuestionnaireClinicalAssessment[]
 }
 
 model AppointmentSlot {
@@ -182,6 +237,10 @@ updatedAt DateTime @default(now()) @updatedAt
   slot   AppointmentSlot? @relation(fields: [slotId], references: [slotId], onDelete: SetNull)
 
   donationRecords DonationRecord[]
+  questionnaireClinicalAssessments QuestionnaireClinicalAssessment[]
+  questionnaireBookingAssociations QuestionnaireBookingAssociation[]
+
+  @@unique([appointmentId, donorId])
 }
 
 model DonationRecord {
@@ -412,4 +471,199 @@ model AuditLog {
 
   actorUserId Int?
   actorUser   User? @relation("UserAuditLogs", fields: [actorUserId], references: [userId], onDelete: SetNull)
+}
+
+model QuestionnaireVersion {
+  questionnaireVersionId Int      @id @default(autoincrement())
+  versionNumber          Int      @unique
+  title                  String
+  status                 QuestionnaireVersionStatus @default(DRAFT)
+  effectiveFrom          DateTime?
+  effectiveTo            DateTime?
+  publishedAt            DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @default(now()) @updatedAt
+
+  questions    QuestionnaireQuestion[]
+  submissions  DonorQuestionnaireSubmission[]
+
+  @@index([status, effectiveFrom])
+  @@index([publishedAt])
+}
+
+model QuestionnaireQuestion {
+  questionnaireQuestionId Int      @id @default(autoincrement())
+  versionId               Int
+  version                 QuestionnaireVersion @relation(fields: [versionId], references: [questionnaireVersionId], onDelete: Restrict)
+  questionKey             String
+  numberLabel             String
+  subsectionLabel         String?
+  prompt                  String
+  answerType              QuestionnaireAnswerType
+  parentQuestionId        Int?
+  parentQuestion          QuestionnaireQuestion? @relation("QuestionnaireQuestionParent", fields: [parentQuestionId], references: [questionnaireQuestionId], onDelete: Restrict)
+  childQuestions          QuestionnaireQuestion[] @relation("QuestionnaireQuestionParent")
+  displayOrder            Int
+  required                Boolean @default(true)
+  isDerived               Boolean @default(false)
+  createdAt               DateTime @default(now())
+
+  options  QuestionnaireOption[]
+  answers  QuestionnaireAnswer[]
+
+  @@unique([versionId, questionKey])
+  @@unique([versionId, displayOrder])
+  @@unique([questionnaireQuestionId, versionId])
+  @@index([versionId, parentQuestionId, displayOrder])
+}
+
+model QuestionnaireOption {
+  optionId      Int      @id @default(autoincrement())
+  questionId    Int
+  question      QuestionnaireQuestion @relation(fields: [questionId], references: [questionnaireQuestionId], onDelete: Restrict)
+  optionKey     String
+  optionLabel   String
+  displayOrder  Int
+  isActive      Boolean @default(true)
+  createdAt     DateTime @default(now())
+
+  answers QuestionnaireAnswer[]
+
+  @@unique([questionId, optionKey])
+  @@unique([questionId, displayOrder])
+  @@unique([optionId, questionId])
+  @@index([questionId, isActive])
+}
+
+model DonorQuestionnaireSubmission {
+  submissionId                  Int      @id @default(autoincrement())
+  donorId                       Int
+  donor                         Donor @relation(fields: [donorId], references: [donorId], onDelete: Restrict)
+  versionId                     Int
+  version                       QuestionnaireVersion @relation(fields: [versionId], references: [questionnaireVersionId], onDelete: Restrict)
+  status                        QuestionnaireSubmissionStatus @default(DRAFT)
+  submittedAt                   DateTime?
+  declarationAcknowledgedAt     DateTime?
+  donorInformationSnapshot      Json?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @default(now()) @updatedAt
+
+  answers      QuestionnaireAnswer[]
+  review       QuestionnaireReview?
+  assessments  QuestionnaireClinicalAssessment[]
+  approvals    QuestionnaireApproval[]
+
+  @@unique([submissionId, donorId])
+  @@unique([submissionId, versionId])
+  @@index([donorId, status, submittedAt])
+  @@index([versionId, status])
+  @@index([submittedAt])
+}
+
+model QuestionnaireAnswer {
+  answerId             Int      @id @default(autoincrement())
+  submissionId         Int
+  versionId            Int
+  submission           DonorQuestionnaireSubmission @relation(fields: [submissionId, versionId], references: [submissionId, versionId], onDelete: Restrict)
+  questionId           Int
+  question             QuestionnaireQuestion @relation(fields: [questionId, versionId], references: [questionnaireQuestionId, versionId], onDelete: Restrict)
+  answerOptionId       Int?
+  answerOption         QuestionnaireOption? @relation(fields: [answerOptionId, questionId], references: [optionId, questionId], onDelete: Restrict)
+  textValue            String?
+  dateValue            DateTime? @db.Date
+  numberValue          Float?
+  booleanValue         Boolean?
+  travelPeriodValue    Int?
+  travelPeriodUnit     QuestionnaireTravelPeriodUnit?
+  answeredAt           DateTime @default(now())
+
+  @@unique([submissionId, questionId])
+  @@index([submissionId, versionId])
+  @@index([questionId, versionId])
+  @@index([answerOptionId, questionId])
+}
+
+model QuestionnaireReview {
+  reviewId        Int      @id @default(autoincrement())
+  submissionId    Int      @unique
+  submission      DonorQuestionnaireSubmission @relation(fields: [submissionId], references: [submissionId], onDelete: Restrict)
+  reviewerStaffId Int
+  reviewerStaff   KnbtsStaff @relation(fields: [reviewerStaffId], references: [knbtsStaffId], onDelete: Restrict)
+  decision        QuestionnaireReviewDecision
+  reviewedAt      DateTime
+  declineReason   String?
+  internalNote    String?
+
+  approval    QuestionnaireApproval?
+  assessments QuestionnaireClinicalAssessment[]
+
+  @@unique([submissionId, reviewId])
+  @@index([reviewerStaffId, reviewedAt])
+  @@index([decision, reviewedAt])
+}
+
+model QuestionnaireClinicalAssessment {
+  clinicalAssessmentId     Int      @id @default(autoincrement())
+  submissionId             Int
+  donorId                  Int
+  submission               DonorQuestionnaireSubmission @relation(fields: [submissionId, donorId], references: [submissionId, donorId], onDelete: Restrict)
+  assessedByKnbtsStaffId   Int
+  assessedByKnbtsStaff     KnbtsStaff @relation(fields: [assessedByKnbtsStaffId], references: [knbtsStaffId], onDelete: Restrict)
+  reviewId                 Int?
+  review                   QuestionnaireReview? @relation(fields: [submissionId, reviewId], references: [submissionId, reviewId], onDelete: Restrict)
+  appointmentId            Int?
+  appointment              Appointment? @relation(fields: [appointmentId, donorId], references: [appointmentId, donorId], onDelete: Restrict)
+  assessmentDate           DateTime @default(now())
+  decision                 QuestionnaireClinicalDecision
+  weightKg                 Decimal? @db.Decimal(5, 2)
+  bloodPressure            String?
+  deferralPeriodDays       Int?
+  deferralUntil            DateTime? @db.Date
+  reason                   String?
+  createdAt                DateTime @default(now())
+
+  @@index([submissionId, assessmentDate])
+  @@index([submissionId, donorId])
+  @@index([reviewId, submissionId])
+  @@index([assessedByKnbtsStaffId, assessmentDate])
+  @@index([appointmentId, donorId])
+}
+
+model QuestionnaireApproval {
+  approvalId   Int      @id @default(autoincrement())
+  submissionId Int
+  donorId      Int
+  submission   DonorQuestionnaireSubmission @relation(fields: [submissionId, donorId], references: [submissionId, donorId], onDelete: Restrict)
+  reviewId     Int      @unique
+  review       QuestionnaireReview @relation(fields: [submissionId, reviewId], references: [submissionId, reviewId], onDelete: Restrict)
+  donor        Donor @relation(fields: [donorId], references: [donorId], onDelete: Restrict)
+  approvedAt   DateTime
+  expiresAt    DateTime
+  status       QuestionnaireApprovalStatus @default(ACTIVE)
+  consumedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  bookingAssociations QuestionnaireBookingAssociation[]
+
+  @@unique([submissionId, reviewId])
+  @@index([submissionId, donorId])
+  @@index([submissionId, reviewId])
+  @@index([donorId, status, expiresAt])
+  @@index([expiresAt, status])
+}
+
+model QuestionnaireBookingAssociation {
+  bookingAssociationId Int      @id @default(autoincrement())
+  approvalId           Int
+  approval             QuestionnaireApproval @relation(fields: [approvalId], references: [approvalId], onDelete: Restrict)
+  appointmentId        Int      @unique
+  appointment          Appointment @relation(fields: [appointmentId], references: [appointmentId], onDelete: Restrict)
+  authorizedAt         DateTime
+  status               QuestionnaireBookingAssociationStatus @default(ACTIVE)
+  releasedAt           DateTime?
+  consumedAt           DateTime?
+  createdAt            DateTime @default(now())
+
+  @@index([approvalId, status])
+  @@index([appointmentId, status])
 }
