@@ -135,10 +135,12 @@ describe("Donor profile API", () => {
     });
 
     try {
+      const today = new Date();
+      const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
       const invalidResponse = await request(app)
         .patch("/api/donor/profile")
         .set("Authorization", `Bearer ${donorToken}`)
-        .send({ birthDate: "2014-05-10" });
+        .send({ birthDate: exact18BirthDate.toISOString().slice(0, 10) });
       expect(invalidResponse.status).toBe(400);
 
       const response = await request(app)
@@ -241,7 +243,7 @@ describe("Donor profile API", () => {
     }
   });
 
-  it("uses the four-month interval to block early donation bookings", async () => {
+  it("uses the 90-day interval to block early donation bookings", async () => {
     const latitude = -1.286389;
     const longitude = 36.817223;
     const nearbyResponse = await request(app)
@@ -270,12 +272,24 @@ describe("Donor profile API", () => {
     });
     let donationId;
     let appointmentId;
+    let qualifyingAppointmentId;
 
     try {
       await prisma.donor.update({
         where: { donorId: donorUser.donor.donorId },
-        data: { lastDonationDate: null },
+        data: { lastDonationDate: new Date("2035-01-01T00:00:00.000Z") },
       });
+      const qualifyingAppointment = await prisma.appointment.create({
+        data: {
+          date: new Date(Date.now() - 24 * 60 * 60 * 1000),
+          time: "08:30",
+          purpose: "Blood Donation",
+          status: "COMPLETED",
+          donorId: donorUser.donor.donorId,
+          hospitalId: hospital.hospitalId,
+        },
+      });
+      qualifyingAppointmentId = qualifyingAppointment.appointmentId;
       const donation = await prisma.donationRecord.create({
         data: {
           donationDate: new Date(),
@@ -283,9 +297,36 @@ describe("Donor profile API", () => {
           quantity: 450,
           status: "AVAILABLE",
           donorId: donorUser.donor.donorId,
+          appointmentId: qualifyingAppointmentId,
         },
       });
       donationId = donation.donationId;
+
+      for (const cacheDate of [
+        new Date("2035-01-01T00:00:00.000Z"),
+        new Date("2000-01-01T00:00:00.000Z"),
+        null,
+      ]) {
+        await prisma.donor.update({
+          where: { donorId: donorUser.donor.donorId },
+          data: { lastDonationDate: cacheDate },
+        });
+        const profileResponse = await request(app)
+          .get("/api/donor/profile")
+          .set("Authorization", `Bearer ${donorToken}`);
+        expect(profileResponse.status).toBe(200);
+        expect(new Date(profileResponse.body.data.user.lastSuccessfulDonationDate).toISOString().slice(0, 10))
+          .toBe(donation.donationDate.toISOString().slice(0, 10));
+      }
+
+      await prisma.donor.update({
+        where: { donorId: donorUser.donor.donorId },
+        data: { lastDonationDate: new Date("2035-01-01T00:00:00.000Z") },
+      });
+
+      const slotBefore = await prisma.appointmentSlot.findUnique({ where: { slotId: slot.slotId } });
+      expect(slotBefore.bookedCount).toBe(0);
+
       const donationResponse = await request(app)
         .post("/api/donor/appointments")
         .set("Authorization", `Bearer ${donorToken}`)
@@ -298,6 +339,9 @@ describe("Donor profile API", () => {
         });
       expect(donationResponse.status).toBe(409);
       expect(donationResponse.body.message).toMatch(/schedule another blood donation from/);
+
+      const slotAfter = await prisma.appointmentSlot.findUnique({ where: { slotId: slot.slotId } });
+      expect(slotAfter.bookedCount).toBe(0);
 
       const testAppointmentResponse = await request(app)
         .post("/api/donor/appointments")
@@ -314,11 +358,163 @@ describe("Donor profile API", () => {
     } finally {
       if (appointmentId) await prisma.appointment.delete({ where: { appointmentId } });
       if (donationId) await prisma.donationRecord.delete({ where: { donationId } });
+      if (qualifyingAppointmentId) await prisma.appointment.delete({ where: { appointmentId: qualifyingAppointmentId } });
       await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
       await prisma.donor.update({
         where: { donorId: donorUser.donor.donorId },
         data: { lastDonationDate: originalDonor.lastDonationDate },
       });
+    }
+  });
+
+  it("rejects an age-ineligible booking without reserving slot capacity or creating an appointment", async () => {
+    const latitude = -1.286389;
+    const longitude = 36.817223;
+    const nearbyResponse = await request(app)
+      .get("/api/donor/appointments/nearby")
+      .query({ latitude, longitude })
+      .set("Authorization", `Bearer ${donorToken}`);
+    expect(nearbyResponse.status).toBe(200);
+    const hospital = nearbyResponse.body.data.hospitals[0];
+    if (!hospital) return;
+
+    const staff = await prisma.hospitalStaff.findFirst({ where: { hospitalId: hospital.hospitalId } });
+    if (!staff) return;
+    const slotDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const slot = await prisma.appointmentSlot.create({
+      data: {
+        hospitalId: hospital.hospitalId,
+        createdByStaffId: staff.staffId,
+        slotDate: new Date(Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate())),
+        time: "10:45",
+        capacity: 1,
+      },
+    });
+
+    const originalDonor = await prisma.donor.findUnique({
+      where: { donorId: donorUser.donor.donorId },
+      select: { birthDate: true },
+    });
+
+    try {
+      const today = new Date();
+      const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+      await prisma.donor.update({
+        where: { donorId: donorUser.donor.donorId },
+        data: { birthDate: exact18BirthDate },
+      });
+
+      const response = await request(app)
+        .post("/api/donor/appointments")
+        .set("Authorization", `Bearer ${donorToken}`)
+        .send({
+          slotId: slot.slotId,
+          purpose: "Blood Donation",
+          hospitalId: hospital.hospitalId,
+          locationLatitude: latitude,
+          locationLongitude: longitude,
+        });
+
+      expect(response.status).toBe(409);
+      expect(response.body.message).toMatch(/older than 18/);
+      expect((await prisma.appointmentSlot.findUnique({ where: { slotId: slot.slotId } })).bookedCount).toBe(0);
+      expect(await prisma.appointment.count({
+        where: { slotId: slot.slotId, donorId: donorUser.donor.donorId },
+      })).toBe(0);
+    } finally {
+      await prisma.donor.update({
+        where: { donorId: donorUser.donor.donorId },
+        data: { birthDate: originalDonor.birthDate },
+      });
+      await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
+    }
+  });
+
+  it("allows blood donation booking with no qualifying record even if cache exists", async () => {
+    const latitude = -1.286389;
+    const longitude = 36.817223;
+    const email = `no-record-${Date.now()}@hemoconnect.co.ke`;
+    let isolatedUser;
+    let isolatedDonor;
+    let isolatedToken;
+    let slot;
+    let appointmentId;
+
+    try {
+      isolatedUser = await prisma.user.create({
+        data: {
+          firstName: "No",
+          lastName: "Record",
+          email,
+          phone: "0790000099",
+          password: "test-only-password",
+          role: "DONOR",
+          status: "ACTIVE",
+        },
+      });
+      isolatedDonor = await prisma.donor.create({
+        data: {
+          firstName: "No",
+          lastName: "Record",
+          bloodType: "O+",
+          birthDate: new Date("1996-05-10T00:00:00.000Z"),
+          gender: "OTHER",
+          address: "Nairobi",
+          latitude,
+          longitude,
+          lastDonationDate: new Date("2035-01-01T00:00:00.000Z"),
+          userId: isolatedUser.userId,
+        },
+      });
+      isolatedToken = jwt.sign(
+        { userId: isolatedUser.userId, role: "DONOR" },
+        env.JWT_SECRET,
+        { expiresIn: env.JWT_EXPIRES_IN }
+      );
+
+      const nearbyResponse = await request(app)
+        .get("/api/donor/appointments/nearby")
+        .query({ latitude, longitude })
+        .set("Authorization", `Bearer ${isolatedToken}`);
+      expect(nearbyResponse.status).toBe(200);
+      const hospital = nearbyResponse.body.data.hospitals[0];
+      if (!hospital) return;
+
+      const staff = await prisma.hospitalStaff.findFirst({ where: { hospitalId: hospital.hospitalId } });
+      if (!staff) return;
+      const slotDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      slot = await prisma.appointmentSlot.create({
+        data: {
+          hospitalId: hospital.hospitalId,
+          createdByStaffId: staff.staffId,
+          slotDate: new Date(Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate())),
+          time: "11:45",
+          capacity: 1,
+        },
+      });
+
+      const profileResponse = await request(app)
+        .get("/api/donor/profile")
+        .set("Authorization", `Bearer ${isolatedToken}`);
+      expect(profileResponse.status).toBe(200);
+      expect(profileResponse.body.data.user.lastSuccessfulDonationDate).toBeNull();
+
+      const response = await request(app)
+        .post("/api/donor/appointments")
+        .set("Authorization", `Bearer ${isolatedToken}`)
+        .send({
+          slotId: slot.slotId,
+          purpose: "Blood Donation",
+          hospitalId: hospital.hospitalId,
+          locationLatitude: latitude,
+          locationLongitude: longitude,
+        });
+      expect(response.status).toBe(201);
+      appointmentId = response.body.data.appointment.appointmentId;
+    } finally {
+      if (appointmentId) await prisma.appointment.delete({ where: { appointmentId } });
+      if (slot) await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
+      if (isolatedUser) await prisma.user.delete({ where: { userId: isolatedUser.userId } });
     }
   });
 
@@ -430,6 +626,23 @@ describe("Donor profile API", () => {
 
   it("keeps donor registration and login working", async () => {
     const email = `donor-test-${Date.now()}@hemoconnect.co.ke`;
+    const today = new Date();
+    const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+
+    const exact18Registration = await request(app).post("/api/auth/register").send({
+      firstName: "Exact",
+      lastName: "Eighteen",
+      email: `exact18-${Date.now()}@hemoconnect.co.ke`,
+      phone: "0790000002",
+      password: "Password123!",
+      role: "DONOR",
+      bloodType: "O+",
+      birthDate: exact18BirthDate.toISOString().slice(0, 10),
+      gender: "OTHER",
+      address: "Nairobi",
+    });
+    expect(exact18Registration.status).toBe(400);
+
     const userData = {
       firstName: "Test",
       lastName: "Donor",

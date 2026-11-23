@@ -1,63 +1,72 @@
-const DONATION_INTERVAL_MONTHS = 4;
+const env = require("../config/env");
+const {
+  addCalendarDays,
+  compareNairobiDateOnly,
+  startOfNairobiDay,
+  toDateOnlyValue,
+} = require("./nairobiDate");
 
-const startOfUtcDay = (value) => {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return null;
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-};
+const DONATION_INTERVAL_DAYS = env.DONATION_WAITING_PERIOD_DAYS;
 
-const addCalendarMonths = (value, months) => {
-  const date = startOfUtcDay(value);
-  if (!date) return null;
+const getDonationEligibility = ({
+  lastSuccessfulDonationDate,
+  today = new Date(),
+  waitingPeriodDays = DONATION_INTERVAL_DAYS,
+}) => {
+  if (!Number.isInteger(waitingPeriodDays) || waitingPeriodDays <= 0) {
+    throw new RangeError("Waiting period must be a positive integer.");
+  }
 
-  const targetMonth = date.getUTCMonth() + months;
-  const targetYear = date.getUTCFullYear() + Math.floor(targetMonth / 12);
-  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
-  const targetDay = Math.min(
-    date.getUTCDate(),
-    new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate()
-  );
-  return new Date(Date.UTC(targetYear, normalizedMonth, targetDay));
-};
-
-const latestDate = (...values) => values
-  .map((value) => value && startOfUtcDay(value))
-  .filter(Boolean)
-  .sort((left, right) => right.getTime() - left.getTime())[0] || null;
-
-const getDonationEligibility = ({ lastSuccessfulDonationDate, today = new Date() }) => {
   const lastDonationDate = lastSuccessfulDonationDate
-    ? startOfUtcDay(lastSuccessfulDonationDate)
+    ? startOfNairobiDay(lastSuccessfulDonationDate)
     : null;
   const nextEligibleDonationDate = lastDonationDate
-    ? addCalendarMonths(lastDonationDate, DONATION_INTERVAL_MONTHS)
+    ? addCalendarDays(lastDonationDate, waitingPeriodDays)
     : null;
-  const todayDate = startOfUtcDay(today);
+  const todayDate = startOfNairobiDay(today);
 
   return {
     lastSuccessfulDonationDate: lastDonationDate,
     nextEligibleDonationDate,
     canScheduleDonation: !nextEligibleDonationDate ||
-      (todayDate && todayDate.getTime() >= nextEligibleDonationDate.getTime()),
+      Boolean(todayDate && nextEligibleDonationDate &&
+        compareNairobiDateOnly(todayDate, nextEligibleDonationDate) >= 0),
   };
 };
 
-const isEligibleForDonationOn = (lastSuccessfulDonationDate, plannedDate) => {
+const isEligibleForDonationOn = (
+  lastSuccessfulDonationDate,
+  plannedDate,
+  waitingPeriodDays = DONATION_INTERVAL_DAYS
+) => {
   if (!lastSuccessfulDonationDate) return true;
-  const eligibility = getDonationEligibility({ lastSuccessfulDonationDate, today: plannedDate });
-  const plannedDay = startOfUtcDay(plannedDate);
+  const eligibility = getDonationEligibility({
+    lastSuccessfulDonationDate,
+    today: plannedDate,
+    waitingPeriodDays,
+  });
+  const plannedDay = startOfNairobiDay(plannedDate);
   return Boolean(
     eligibility.nextEligibleDonationDate &&
     plannedDay &&
-    plannedDay.getTime() >= eligibility.nextEligibleDonationDate.getTime()
+    compareNairobiDateOnly(plannedDay, eligibility.nextEligibleDonationDate) >= 0
   );
 };
 
+const latestDate = (...values) => values
+  .map((value) => value && startOfNairobiDay(value))
+  .filter(Boolean)
+  .sort((left, right) => right.getTime() - left.getTime())[0] || null;
+
+const startOfUtcDay = startOfNairobiDay;
+
 module.exports = {
-  DONATION_INTERVAL_MONTHS,
-  addCalendarMonths,
+  DONATION_INTERVAL_DAYS,
   getDonationEligibility,
   isEligibleForDonationOn,
   latestDate,
   startOfUtcDay,
+  startOfNairobiDay,
+  toDateOnlyValue,
+  addCalendarDays,
 };

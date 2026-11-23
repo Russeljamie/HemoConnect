@@ -3,9 +3,10 @@ const { isValidDonorDateOfBirth, parseDateOfBirth } = require("../utils/dateOfBi
 const {
   getDonationEligibility,
   isEligibleForDonationOn,
-  latestDate,
   startOfUtcDay,
+  startOfNairobiDay,
 } = require("../utils/donationEligibility");
+const { getLatestQualifyingDonation } = require("../services/qualifyingDonation");
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const GENDERS = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
@@ -73,8 +74,7 @@ const getDonorProfile = async (req, res, next) => {
       });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfNairobiDay(new Date());
 
     const [totalDonations, appointmentRecords, latestSuccessfulDonation] = await Promise.all([
       prisma.donationRecord.count({ where: { donorId: user.donor.donorId } }),
@@ -94,16 +94,9 @@ const getDonorProfile = async (req, res, next) => {
           status: true,
         },
       }),
-      prisma.donationRecord.findFirst({
-        where: { donorId: user.donor.donorId, status: "AVAILABLE" },
-        orderBy: [{ donationDate: "desc" }, { donationId: "desc" }],
-        select: { donationDate: true },
-      }),
+      getLatestQualifyingDonation(prisma, user.donor.donorId),
     ]);
-    const lastSuccessfulDonationDate = latestDate(
-      user.donor.lastDonationDate,
-      latestSuccessfulDonation?.donationDate
-    );
+    const lastSuccessfulDonationDate = latestSuccessfulDonation?.donationDate || null;
     const donationEligibility = getDonationEligibility({ lastSuccessfulDonationDate });
 
     const upcomingAppointments = appointmentRecords.map((appointment) => ({
@@ -154,7 +147,7 @@ const getDonorProfile = async (req, res, next) => {
           latitude: user.donor.latitude,
           longitude: user.donor.longitude,
           eligibility: user.donor.isEligible,
-          lastDonationDate: user.donor.lastDonationDate,
+          lastDonationDate: lastSuccessfulDonationDate,
           lastSuccessfulDonationDate: donationEligibility.lastSuccessfulDonationDate,
           nextEligibleDonationDate: donationEligibility.nextEligibleDonationDate,
           canScheduleDonation: donationEligibility.canScheduleDonation,
@@ -457,8 +450,7 @@ const listDonorAppointmentSlots = async (req, res, next) => {
     if (!Number.isSafeInteger(hospitalId) || hospitalId < 1) {
       return res.status(400).json({ success: false, message: "Choose a valid hospital." });
     }
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    const today = startOfNairobiDay(new Date());
     const slots = await prisma.appointmentSlot.findMany({
       where: {
         hospitalId,
@@ -522,7 +514,7 @@ const createDonorAppointment = async (req, res, next) => {
     const [donor, hospitals] = await Promise.all([
       prisma.donor.findUnique({
         where: { donorId },
-        select: { isEligible: true, lastDonationDate: true },
+        select: { isEligible: true, birthDate: true },
       }),
       prisma.hospital.findMany({
         where: {
@@ -574,7 +566,7 @@ const createDonorAppointment = async (req, res, next) => {
 
     const bookingOutcome = await prisma.$transaction(async (tx) => {
       const donorRows = await tx.$queryRaw`
-        SELECT "donorId", "lastDonationDate"
+        SELECT "donorId", "birthDate", NOW() AS "databaseNow"
         FROM "Donor"
         WHERE "donorId" = ${donorId}
         FOR UPDATE
@@ -582,12 +574,22 @@ const createDonorAppointment = async (req, res, next) => {
       const lockedDonor = donorRows[0];
       if (!lockedDonor) return { error: "DONOR_NOT_FOUND" };
 
+      const bookingNow = lockedDonor.databaseNow instanceof Date
+        ? lockedDonor.databaseNow
+        : new Date(lockedDonor.databaseNow);
+      if (!Number.isFinite(bookingNow.getTime())) return { error: "DATABASE_CLOCK_UNAVAILABLE" };
+
+      if (!lockedDonor.birthDate || !isValidDonorDateOfBirth(lockedDonor.birthDate, bookingNow)) {
+        return { error: "AGE_INELIGIBLE" };
+      }
+
+      const currentNairobiDay = startOfNairobiDay(bookingNow);
       const slot = await tx.appointmentSlot.findFirst({
         where: {
           slotId,
           hospitalId,
           status: "OPEN",
-          slotDate: { gte: startOfUtcDay(new Date()) },
+          slotDate: { gte: currentNairobiDay },
           hospital: {
             isActive: true,
             institutionType: "HOSPITAL",
@@ -600,22 +602,18 @@ const createDonorAppointment = async (req, res, next) => {
       if (!slot) return { error: "SLOT_UNAVAILABLE" };
 
       if (purpose.toLowerCase() === "blood donation") {
-        const latestSuccessfulDonation = await tx.donationRecord.findFirst({
-          where: { donorId, status: "AVAILABLE" },
-          orderBy: [{ donationDate: "desc" }, { donationId: "desc" }],
-          select: { donationDate: true },
-        });
-        const lastSuccessfulDonationDate = latestDate(
-          lockedDonor.lastDonationDate,
-          latestSuccessfulDonation?.donationDate
-        );
-        if (!isEligibleForDonationOn(lastSuccessfulDonationDate, slot.slotDate)) {
-          const { nextEligibleDonationDate } = getDonationEligibility({ lastSuccessfulDonationDate });
+        const latestSuccessfulDonation = await getLatestQualifyingDonation(tx, donorId);
+        const lastSuccessfulDonationDate = latestSuccessfulDonation?.donationDate || null;
+        if (!isEligibleForDonationOn(lastSuccessfulDonationDate, slot.slotDate, undefined)) {
+          const { nextEligibleDonationDate } = getDonationEligibility({
+            lastSuccessfulDonationDate,
+            today: bookingNow,
+          });
           return { error: "DONATION_COOLDOWN", nextEligibleDonationDate };
         }
       }
 
-      const currentDay = new Date();
+      const currentDay = currentNairobiDay;
       currentDay.setUTCHours(0, 0, 0, 0);
       const reserved = await tx.$executeRaw`
         UPDATE "AppointmentSlot"
@@ -645,6 +643,12 @@ const createDonorAppointment = async (req, res, next) => {
     });
     if (bookingOutcome.error === "DONOR_NOT_FOUND") {
       return res.status(404).json({ success: false, message: "Donor profile not found." });
+    }
+    if (bookingOutcome.error === "DATABASE_CLOCK_UNAVAILABLE") {
+      return res.status(503).json({ success: false, message: "Booking time could not be verified. Please retry." });
+    }
+    if (bookingOutcome.error === "AGE_INELIGIBLE") {
+      return res.status(409).json({ success: false, message: "You must be older than 18 years to book a blood donation." });
     }
     if (bookingOutcome.error === "DONATION_COOLDOWN") {
       return res.status(409).json({
@@ -683,8 +687,7 @@ const cancelDonorAppointment = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Donor profile not found." });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfNairobiDay(new Date());
     const result = await prisma.$transaction(async (tx) => {
       const current = await tx.appointment.findFirst({
         where: {
