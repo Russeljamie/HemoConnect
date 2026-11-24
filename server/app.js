@@ -21,7 +21,12 @@ app.use(helmet());
 
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify: (req, res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", routes);

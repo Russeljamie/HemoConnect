@@ -1,5 +1,6 @@
 const prisma = require("./prisma");
 const env = require("../config/env");
+const { notifyUser } = require("./notificationDelivery");
 
 const OPEN_REQUEST_STATUSES = ["OPEN", "PENDING", "URGENT"];
 const EARTH_RADIUS_KM = 6371;
@@ -31,16 +32,34 @@ const sendDonorAlert = async (request, donor, wave, distanceKm) =>
       },
     });
 
-    await tx.notification.create({
-      data: {
-        type: "EMERGENCY_BLOOD_REQUEST",
-        channel: "IN_APP",
-        title: "Nearby blood request",
-        message: `${request.bloodType} blood is needed nearby (${distanceKm.toFixed(1)} km). Please respond to this ${request.urgencyLevel.toLowerCase()} request.`,
-        status: "SENT",
-        sentAt: new Date(),
-        userId: donor.userId,
+    const hospitalName = request.hospital?.name || "a nearby hospital";
+    await notifyUser(tx, {
+      userId: donor.userId,
+      email: donor.user.email,
+      phone: donor.user.phone,
+      eventKey: `emergency-${request.requestId}-donor-${donor.donorId}`,
+      type: "EMERGENCY_BLOOD_REQUEST",
+      title: "Nearby blood request",
+      message: `${request.bloodType} blood is needed nearby (${distanceKm.toFixed(1)} km). Please respond to this ${request.urgencyLevel.toLowerCase()} request.`,
+      requestId: request.requestId,
+      emailTemplate: "DONOR_EMERGENCY_ALERT",
+      emailPayload: {
+        name: `${donor.firstName} ${donor.lastName}`,
         requestId: request.requestId,
+        bloodType: request.bloodType,
+        urgency: request.urgencyLevel,
+        distanceKm: distanceKm.toFixed(1),
+        neededBy: request.neededBy,
+        hospital: request.hospital?.name || null,
+      },
+      smsMessage: `Emergency HemoConnect request: ${request.bloodType} blood is needed (${request.urgencyLevel.toLowerCase()}) about ${distanceKm.toFixed(1)} km away at ${hospitalName}. Sign in to respond.`,
+    });
+    await tx.auditLog.create({
+      data: {
+        action: "EMERGENCY_DONOR_ALERT_QUEUED",
+        entityType: "EmergencyRequest",
+        entityId: String(request.requestId),
+        details: { donorId: donor.donorId, wave, distanceKm },
       },
     });
 
@@ -56,14 +75,17 @@ const dispatchWave = async (request, wave) => {
           isEligible: true,
           latitude: { not: null },
           longitude: { not: null },
-          user: { status: "ACTIVE" },
+          user: { status: "ACTIVE", role: "DONOR" },
           requestMatches: { none: { requestId: request.requestId } },
         },
         select: {
           donorId: true,
           userId: true,
+          firstName: true,
+          lastName: true,
           latitude: true,
           longitude: true,
+          user: { select: { email: true, phone: true, status: true } },
         },
       });
 
@@ -113,6 +135,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
       currentWave: true,
       lastAlertAt: true,
       matches: { where: { status: "ACCEPTED" }, select: { matchId: true }, take: 1 },
+      hospital: { select: { name: true } },
     },
   });
 

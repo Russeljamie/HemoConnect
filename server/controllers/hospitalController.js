@@ -2,6 +2,14 @@ const prisma = require("../services/prisma");
 const { processEmergencyRequest } = require("../services/donorMatching");
 const { recordRequestEvent } = require("../services/requestEvents");
 const { latestDate } = require("../utils/donationEligibility");
+const {
+  cancelAppointmentWithApproval,
+  consumeApprovalForCompletedDonation,
+} = require("../services/approvalBookingService");
+const {
+  notifyUser,
+  queueHospitalInventoryAlert,
+} = require("../services/notificationDelivery");
 
 const getHospitalStaff = async (userId) => prisma.hospitalStaff.findUnique({
   where: { userId },
@@ -278,6 +286,14 @@ const updateHospitalInventoryMinimum = async (req, res, next) => {
           },
         },
       });
+      if (current.unitsAvailable > current.minimumUnits &&
+          updated.unitsAvailable <= updated.minimumUnits) {
+        await queueHospitalInventoryAlert(tx, {
+          inventory: updated,
+          eventKey: `inventory-low-${updated.inventoryId}-${updated.updatedAt.getTime()}`,
+          actorUserId: req.user.userId,
+        });
+      }
       return updated;
     });
 
@@ -393,13 +409,39 @@ const adjustHospitalInventory = async (req, res, next) => {
         });
       }
 
-      await tx.inventoryTransaction.create({
+      const transaction = await tx.inventoryTransaction.create({
         data: {
           transactionType: unitsChange > 0 ? "STOCK_ADDITION" : "STOCK_REMOVAL",
           unitsChanged: unitsChange,
           reason: reason || null,
           inventoryId: inventory.inventoryId,
           performedByUserId: req.user.userId,
+        },
+      });
+      const previousUnits = existing?.unitsAvailable ?? 0;
+      const wasBelowMinimum = existing
+        ? existing.unitsAvailable <= existing.minimumUnits
+        : false;
+      if (!wasBelowMinimum && inventory.unitsAvailable <= inventory.minimumUnits) {
+        await queueHospitalInventoryAlert(tx, {
+          inventory,
+          eventKey: `inventory-low-${inventory.inventoryId}-transaction-${transaction.transactionId}`,
+          actorUserId: req.user.userId,
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          action: "HOSPITAL_INVENTORY_ADJUSTED",
+          entityType: "BloodInventory",
+          entityId: String(inventory.inventoryId),
+          actorUserId: req.user.userId,
+          details: {
+            hospitalId: staff.hospitalId,
+            bloodType,
+            previousUnits,
+            newUnits: inventory.unitsAvailable,
+            unitsChange,
+          },
         },
       });
       return { inventory };
@@ -611,7 +653,7 @@ const fulfillHospitalRequest = async (req, res, next) => {
         throw Object.assign(new Error("Request fulfillment changed concurrently."), { workflowError: "REQUEST_CHANGED" });
       }
 
-      await tx.inventoryTransaction.create({
+      const transaction = await tx.inventoryTransaction.create({
         data: {
           transactionType: "REQUEST_FULFILLMENT",
           unitsChanged: -req.body.quantity,
@@ -623,6 +665,18 @@ const fulfillHospitalRequest = async (req, res, next) => {
       });
 
       const updatedRequest = await tx.emergencyRequest.findUnique({ where: { requestId } });
+      const updatedInventory = {
+        ...inventory,
+        unitsAvailable: inventory.unitsAvailable - req.body.quantity,
+      };
+      if (inventory.unitsAvailable > inventory.minimumUnits &&
+          updatedInventory.unitsAvailable <= updatedInventory.minimumUnits) {
+        await queueHospitalInventoryAlert(tx, {
+          inventory: updatedInventory,
+          eventKey: `inventory-low-${inventory.inventoryId}-transaction-${transaction.transactionId}`,
+          actorUserId: req.user.userId,
+        });
+      }
       await recordRequestEvent(tx, {
         request: updatedRequest,
         actorUserId: req.user.userId,
@@ -776,7 +830,7 @@ const updateHospitalAppointment = async (req, res, next) => {
     const appointmentId = Number(req.params.appointmentId);
     const appointment = await prisma.appointment.findFirst({
       where: { appointmentId, hospitalId: staff.hospitalId },
-      select: { appointmentId: true, status: true, purpose: true },
+      select: { appointmentId: true, donorId: true, status: true, purpose: true },
     });
     if (!appointment) {
       return res.status(404).json({ success: false, message: "Appointment not found." });
@@ -804,6 +858,15 @@ const updateHospitalAppointment = async (req, res, next) => {
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      if (nextStatus === "CANCELLED") {
+        const cancellation = await cancelAppointmentWithApproval(tx, {
+          appointmentId,
+          donorId: appointment.donorId,
+          hospitalId: staff.hospitalId,
+          actorUserId: req.user.userId,
+        });
+        return cancellation.cancelled ? 1 : 0;
+      }
       const current = await tx.appointment.findFirst({
         where: { appointmentId, hospitalId: staff.hospitalId, status: appointment.status },
         select: { appointmentId: true, slotId: true },
@@ -848,6 +911,13 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
 
     const appointmentId = Number(req.params.appointmentId);
     const outcome = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT "appointmentId"
+        FROM "Appointment"
+        WHERE "appointmentId" = ${appointmentId}
+          AND "hospitalId" = ${staff.hospitalId}
+        FOR UPDATE
+      `;
       const appointment = await tx.appointment.findFirst({
         where: {
           appointmentId,
@@ -860,7 +930,16 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
         select: {
           appointmentId: true,
           donorId: true,
-          donor: { select: { bloodType: true, lastDonationDate: true } },
+          hospital: { select: { name: true } },
+          donor: {
+            select: {
+              firstName: true,
+              lastName: true,
+              bloodType: true,
+              lastDonationDate: true,
+              user: { select: { userId: true, email: true, phone: true } },
+            },
+          },
         },
       });
       if (!appointment) return { error: "APPOINTMENT_NOT_ELIGIBLE" };
@@ -898,6 +977,35 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
           ),
         },
       });
+      await consumeApprovalForCompletedDonation(tx, appointmentId, appointment.donorId);
+      await notifyUser(tx, {
+        userId: appointment.donor.user.userId,
+        email: appointment.donor.user.email,
+        phone: appointment.donor.user.phone,
+        eventKey: `donation-${donation.donationId}-completed`,
+        type: "DONATION_COMPLETED",
+        title: "Donation recorded",
+        message: "Your blood donation has been recorded successfully. Thank you for helping save lives.",
+        emailTemplate: "DONATION_COMPLETED",
+        emailPayload: {
+          name: `${appointment.donor.firstName} ${appointment.donor.lastName}`,
+          date: donation.donationDate,
+          hospital: appointment.hospital?.name || "the hospital",
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "DONATION_COMPLETED",
+          entityType: "DonationRecord",
+          entityId: String(donation.donationId),
+          actorUserId: req.user.userId,
+          details: {
+            appointmentId,
+            donorId: appointment.donorId,
+            hospitalId: staff.hospitalId,
+          },
+        },
+      });
       return { donation };
     });
 
@@ -920,6 +1028,19 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
       data: { donation: outcome.donation },
     });
   } catch (error) {
+    if (error.workflowError === "INVALID_APPROVAL_RELATIONSHIP") {
+      return res.status(409).json({
+        success: false,
+        message: "The appointment approval association is invalid.",
+        code: "INVALID_APPROVAL_RELATIONSHIP",
+      });
+    }
+    if (error.workflowError === "DATABASE_CLOCK_UNAVAILABLE") {
+      return res.status(503).json({
+        success: false,
+        message: "Completion time could not be verified.",
+      });
+    }
     if (error.workflowError === "APPOINTMENT_CHANGED" || error.code === "P2002") {
       return res.status(409).json({
         success: false,

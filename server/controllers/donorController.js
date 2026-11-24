@@ -7,6 +7,12 @@ const {
   startOfNairobiDay,
 } = require("../utils/donationEligibility");
 const { getLatestQualifyingDonation } = require("../services/qualifyingDonation");
+const {
+  getDatabaseNow,
+  lockActiveApprovalForBooking,
+  cancelAppointmentWithApproval,
+} = require("../services/approvalBookingService");
+const { notifyAppointment } = require("../services/notificationDelivery");
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const GENDERS = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
@@ -161,6 +167,13 @@ const getDonorProfile = async (req, res, next) => {
       },
     });
   } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "The appointment or approval booking state changed concurrently. Please retry.",
+        code: "BOOKING_CONFLICT",
+      });
+    }
     next(error);
   }
 };
@@ -514,7 +527,13 @@ const createDonorAppointment = async (req, res, next) => {
     const [donor, hospitals] = await Promise.all([
       prisma.donor.findUnique({
         where: { donorId },
-        select: { isEligible: true, birthDate: true },
+        select: {
+          isEligible: true,
+          birthDate: true,
+          firstName: true,
+          lastName: true,
+          user: { select: { userId: true, email: true, phone: true } },
+        },
       }),
       prisma.hospital.findMany({
         where: {
@@ -583,7 +602,21 @@ const createDonorAppointment = async (req, res, next) => {
         return { error: "AGE_INELIGIBLE" };
       }
 
+      let selectedApproval = null;
+      if (purpose.toLowerCase() === "blood donation") {
+        const approvalOutcome = await lockActiveApprovalForBooking(tx, donorId, bookingNow);
+        if (approvalOutcome.error) return approvalOutcome;
+        selectedApproval = approvalOutcome.approval;
+      }
+
       const currentNairobiDay = startOfNairobiDay(bookingNow);
+      await tx.$queryRaw`
+        SELECT "slotId"
+        FROM "AppointmentSlot"
+        WHERE "slotId" = ${slotId}
+          AND "hospitalId" = ${hospitalId}
+        FOR UPDATE
+      `;
       const slot = await tx.appointmentSlot.findFirst({
         where: {
           slotId,
@@ -637,8 +670,44 @@ const createDonorAppointment = async (req, res, next) => {
           hospitalId,
           slotId,
         },
-        include: { hospital: { select: { name: true, location: true } }, slot: true },
+        include: {
+          hospital: { select: { name: true, location: true } },
+          slot: true,
+          donor: {
+            select: {
+              firstName: true,
+              lastName: true,
+              user: { select: { userId: true, email: true, phone: true } },
+            },
+          },
+        },
       });
+      if (selectedApproval) {
+        await tx.questionnaireBookingAssociation.create({
+          data: {
+            approvalId: selectedApproval.approvalId,
+            appointmentId: appointment.appointmentId,
+            authorizedAt: bookingNow,
+            status: "ACTIVE",
+          },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          action: "DONOR_APPOINTMENT_BOOKED",
+          entityType: "Appointment",
+          entityId: String(appointment.appointmentId),
+          actorUserId: req.user.userId,
+          details: {
+            donorId,
+            hospitalId,
+            slotId,
+            purpose,
+            ...(selectedApproval ? { approvalId: selectedApproval.approvalId } : {}),
+          },
+        },
+      });
+      await notifyAppointment(tx, appointment, "BOOKED");
       return { appointment };
     });
     if (bookingOutcome.error === "DONOR_NOT_FOUND") {
@@ -649,6 +718,20 @@ const createDonorAppointment = async (req, res, next) => {
     }
     if (bookingOutcome.error === "AGE_INELIGIBLE") {
       return res.status(409).json({ success: false, message: "You must be older than 18 years to book a blood donation." });
+    }
+    if (bookingOutcome.error === "NO_VALID_APPROVAL") {
+      return res.status(409).json({
+        success: false,
+        message: "A valid active KNBTS questionnaire approval is required to book a blood donation.",
+        code: "VALID_APPROVAL_REQUIRED",
+      });
+    }
+    if (bookingOutcome.error === "ACTIVE_APPROVAL_BOOKING_EXISTS") {
+      return res.status(409).json({
+        success: false,
+        message: "This approval already has an unresolved active appointment.",
+        code: "ACTIVE_APPROVAL_BOOKING_EXISTS",
+      });
     }
     if (bookingOutcome.error === "DONATION_COOLDOWN") {
       return res.status(409).json({
@@ -671,6 +754,13 @@ const createDonorAppointment = async (req, res, next) => {
       data: { appointment },
     });
   } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "The appointment or approval booking state changed concurrently. Please retry.",
+        code: "BOOKING_CONFLICT",
+      });
+    }
     next(error);
   }
 };
@@ -687,46 +777,26 @@ const cancelDonorAppointment = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Donor profile not found." });
     }
 
-    const today = startOfNairobiDay(new Date());
-    const result = await prisma.$transaction(async (tx) => {
-      const current = await tx.appointment.findFirst({
-        where: {
-          appointmentId,
-          donorId,
-          date: { gte: today },
-          status: { in: ["SCHEDULED", "CONFIRMED"] },
-        },
-        select: { slotId: true },
-      });
-      if (!current) return 0;
-      const updated = await tx.appointment.updateMany({
-        where: {
-          appointmentId,
-          donorId,
-          date: { gte: today },
-          status: { in: ["SCHEDULED", "CONFIRMED"] },
-        },
-        data: { status: "CANCELLED" },
-      });
-      if (updated.count && current.slotId) {
-        await tx.appointmentSlot.updateMany({
-          where: { slotId: current.slotId, bookedCount: { gt: 0 } },
-          data: { bookedCount: { decrement: 1 } },
-        });
-      }
-      return updated.count;
-    });
+    const outcome = await prisma.$transaction(async (tx) =>
+      cancelAppointmentWithApproval(tx, {
+        appointmentId,
+        donorId,
+        actorUserId: req.user.userId,
+      })
+    );
 
-    if (result === 0) {
+    if (!outcome.cancelled) {
       const ownedAppointment = await prisma.appointment.findFirst({
         where: { appointmentId, donorId },
         select: { appointmentId: true },
       });
-      return res.status(ownedAppointment ? 409 : 404).json({
+      const statusCode = outcome.error === "NOT_FOUND" || !ownedAppointment ? 404 : 409;
+      return res.status(statusCode).json({
         success: false,
         message: ownedAppointment
           ? "This appointment can no longer be cancelled."
           : "Appointment not found.",
+        code: outcome.error,
       });
     }
 

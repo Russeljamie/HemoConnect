@@ -44,6 +44,13 @@ const env = {
   SMTP_PASSWORD: process.env.SMTP_PASSWORD || "",
   EMAIL_FROM: process.env.EMAIL_FROM || "",
   EMAIL_WORKER_INTERVAL_MS: Number(process.env.EMAIL_WORKER_INTERVAL_MS) || 30000,
+  SMS_PROVIDER: process.env.SMS_PROVIDER || "mobilesasa",
+  MOBILESASA_API_TOKEN: process.env.MOBILESASA_API_TOKEN || "",
+  MOBILESASA_SENDER_ID: process.env.MOBILESASA_SENDER_ID || "",
+  MOBILESASA_API_URL: process.env.MOBILESASA_API_URL || "https://api.mobilesasa.com/v2/send/message",
+  MOBILESASA_WEBHOOK_SECRET: process.env.MOBILESASA_WEBHOOK_SECRET || "",
+  SMS_DELIVERY_REPORT_URL: process.env.SMS_DELIVERY_REPORT_URL || "",
+  SMS_WORKER_INTERVAL_MS: Number(process.env.SMS_WORKER_INTERVAL_MS) || 30000,
 };
 
 module.exports = env;
