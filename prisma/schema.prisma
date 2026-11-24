@@ -460,6 +460,27 @@ model EmailOutbox {
   @@index([status, nextAttemptAt])
 }
 
+model SmsOutbox {
+  smsId            Int      @id @default(autoincrement())
+  recipientPhone   String?
+  message          String
+  eventKey         String   @unique
+  trackingId       String   @unique
+  status           String   @default("QUEUED")
+  attempts         Int      @default(0)
+  nextAttemptAt    DateTime @default(now())
+  lastError        String?
+  providerMessageId String?
+  createdAt        DateTime @default(now())
+  processingAt     DateTime?
+  acceptedAt       DateTime?
+  deliveredAt      DateTime?
+  failedAt         DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([providerMessageId])
+}
+
 model AuditLog {
   auditLogId Int      @id @default(autoincrement())
   action     String
