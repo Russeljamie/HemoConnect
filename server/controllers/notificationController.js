@@ -1,4 +1,25 @@
 const prisma = require("../services/prisma");
+const env = require("../config/env");
+const {
+  updateSmsDeliveryReport,
+  verifyMobileSasaWebhook,
+} = require("../services/sms");
+
+const receiveSmsDeliveryReport = async (req, res, next) => {
+  if (!env.MOBILESASA_WEBHOOK_SECRET) {
+    return res.status(503).json({ success: false, message: "SMS delivery reports are not configured." });
+  }
+  if (!verifyMobileSasaWebhook(req.rawBody, req.headers)) {
+    return res.status(401).json({ success: false, message: "Invalid SMS delivery report signature." });
+  }
+
+  try {
+    const updated = await updateSmsDeliveryReport(req.body || {});
+    return res.status(200).json({ success: true, processed: updated });
+  } catch (error) {
+    next(error);
+  }
+};
 
 const listNotifications = async (req, res, next) => {
   try {
@@ -68,4 +89,9 @@ const markAllNotificationsRead = async (req, res, next) => {
   }
 };
 
-module.exports = { listNotifications, markNotificationRead, markAllNotificationsRead };
+module.exports = {
+  listNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  receiveSmsDeliveryReport,
+};
