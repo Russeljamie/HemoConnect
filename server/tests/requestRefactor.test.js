@@ -6,6 +6,7 @@ const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
 const { renderEmailTemplate } = require("../services/email");
+const { normalizeKenyanPhoneNumber } = require("../services/sms");
 
 describe("Patient-independent hospital request refactor", () => {
   let staffUser;
@@ -156,8 +157,38 @@ describe("Patient-independent hospital request refactor", () => {
       expect(saved.requestedByUserId).toBe(staffUser.userId);
       expect(saved.patientReference).toBe("WARD-REF-42");
 
-      const match = await prisma.requestMatch.findFirst({ where: { requestId } });
-      expect(match).not.toBeNull();
+      const matches = await prisma.requestMatch.findMany({
+        where: { requestId },
+        include: {
+          donor: {
+            select: {
+              userId: true,
+              user: { select: { email: true, phone: true } },
+            },
+          },
+        },
+      });
+      expect(matches.length).toBeGreaterThan(0);
+      for (const matchedDonor of matches) {
+        const [notification, sms, email] = await Promise.all([
+          prisma.notification.findFirst({
+            where: { requestId, userId: matchedDonor.donor.userId, type: "EMERGENCY_BLOOD_REQUEST" },
+          }),
+          prisma.smsOutbox.findUnique({
+            where: { eventKey: `emergency-${requestId}-donor-${matchedDonor.donorId}:sms` },
+          }),
+          prisma.emailOutbox.findFirst({
+            where: { recipientEmail: matchedDonor.donor.user.email, template: "DONOR_EMERGENCY_ALERT" },
+          }),
+        ]);
+        expect(notification).not.toBeNull();
+        expect(email).not.toBeNull();
+        if (normalizeKenyanPhoneNumber(matchedDonor.donor.user.phone)) {
+          expect(sms.recipientPhone).toBe(normalizeKenyanPhoneNumber(matchedDonor.donor.user.phone));
+        } else {
+          expect(sms.status).toBe("FAILED");
+        }
+      }
 
       const accepted = await request(app)
         .post(`/api/donor/alerts/${requestId}/respond`)
@@ -180,7 +211,20 @@ describe("Patient-independent hospital request refactor", () => {
       });
       expect(afterFulfillment.unitsAvailable).toBe(beforeFulfillment.unitsAvailable - 2);
     } finally {
-      if (requestId) await prisma.emergencyRequest.delete({ where: { requestId } });
+      if (requestId) {
+        const matches = await prisma.requestMatch.findMany({
+          where: { requestId },
+          include: { donor: { select: { user: { select: { email: true } } } } },
+        });
+        await prisma.smsOutbox.deleteMany({ where: { eventKey: { startsWith: `emergency-${requestId}-` } } });
+        await prisma.emailOutbox.deleteMany({
+          where: {
+            recipientEmail: { in: matches.map(({ donor }) => donor.user.email) },
+            template: "DONOR_EMERGENCY_ALERT",
+          },
+        });
+        await prisma.emergencyRequest.delete({ where: { requestId } });
+      }
       const restoredInventory = await prisma.bloodInventory.findUnique({
         where: { hospitalId_bloodType: { hospitalId: staffProfile.hospitalId, bloodType: "O+" } },
       });

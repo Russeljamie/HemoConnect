@@ -4,10 +4,86 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { getNairobiDateParts } = require("../utils/nairobiDate");
+
+const getExact18BirthDate = () => {
+  const today = getNairobiDateParts(new Date());
+  return new Date(Date.UTC(today.year - 18, today.month - 1, today.day));
+};
+
+const getDatabaseExact18BirthDate = async () => {
+  const rows = await prisma.$queryRawUnsafe('SELECT NOW() AS "databaseNow"');
+  const today = getNairobiDateParts(rows[0].databaseNow);
+  return new Date(Date.UTC(today.year - 18, today.month - 1, today.day));
+};
 
 describe("Donor profile API", () => {
   let donorToken;
   let donorUser;
+  let approvalFixture;
+  let approvalFixtureSubmission;
+  let approvalFixtureReview;
+  let approvalFixtureVersion;
+
+  const ensureActiveApproval = async (donor) => {
+    await prisma.questionnaireBookingAssociation.deleteMany({
+      where: { approval: { donorId: donor.donorId } },
+    });
+    await prisma.questionnaireApproval.deleteMany({ where: { donorId: donor.donorId } });
+
+    const nowRows = await prisma.$queryRaw`SELECT NOW() AS "databaseNow"`;
+    const now = nowRows[0].databaseNow instanceof Date
+      ? nowRows[0].databaseNow
+      : new Date(nowRows[0].databaseNow);
+    const version = await prisma.questionnaireVersion.create({
+      data: {
+        versionNumber: Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 100000),
+        title: "Donor booking approval test fixture",
+        status: "PUBLISHED",
+        publishedAt: now,
+      },
+    });
+    const submission = await prisma.donorQuestionnaireSubmission.create({
+      data: {
+        donorId: donor.donorId,
+        versionId: version.questionnaireVersionId,
+        status: "APPROVED",
+        submittedAt: now,
+        declarationAcknowledgedAt: now,
+      },
+    });
+    const review = await prisma.questionnaireReview.create({
+      data: {
+        submissionId: submission.submissionId,
+        reviewerStaffId: (await prisma.knbtsStaff.findFirst()).knbtsStaffId,
+        decision: "APPROVED",
+        reviewedAt: now,
+      },
+    });
+    await prisma.questionnaireClinicalAssessment.create({
+      data: {
+        submissionId: submission.submissionId,
+        donorId: donor.donorId,
+        assessedByKnbtsStaffId: review.reviewerStaffId,
+        reviewId: review.reviewId,
+        decision: "ACCEPT",
+        assessmentDate: now,
+        weightKg: "72.50",
+        bloodPressure: "120/80",
+      },
+    });
+    const approval = await prisma.questionnaireApproval.create({
+      data: {
+        submissionId: submission.submissionId,
+        donorId: donor.donorId,
+        reviewId: review.reviewId,
+        approvedAt: now,
+        expiresAt: new Date(now.getTime() + 336 * 60 * 60 * 1000),
+        status: "ACTIVE",
+      },
+    });
+    return { approval, submission, review, version };
+  };
 
   beforeAll(async () => {
     donorUser = await prisma.user.findUnique({
@@ -15,11 +91,38 @@ describe("Donor profile API", () => {
       include: { donor: true },
     });
 
+    const fixture = await ensureActiveApproval(donorUser.donor);
+    approvalFixture = fixture.approval;
+    approvalFixtureSubmission = fixture.submission;
+    approvalFixtureReview = fixture.review;
+    approvalFixtureVersion = fixture.version;
+
     donorToken = jwt.sign(
       { userId: donorUser.userId, role: donorUser.role },
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
+  });
+
+  afterAll(async () => {
+    await prisma.questionnaireBookingAssociation.deleteMany({
+      where: { approvalId: approvalFixture?.approvalId },
+    });
+    await prisma.questionnaireApproval.deleteMany({
+      where: { donorId: donorUser.donor.donorId },
+    });
+    await prisma.questionnaireClinicalAssessment.deleteMany({
+      where: { submissionId: approvalFixtureSubmission?.submissionId },
+    });
+    await prisma.questionnaireReview.deleteMany({
+      where: { submissionId: approvalFixtureSubmission?.submissionId },
+    });
+    await prisma.donorQuestionnaireSubmission.deleteMany({
+      where: { submissionId: approvalFixtureSubmission?.submissionId },
+    });
+    await prisma.questionnaireVersion.deleteMany({
+      where: { questionnaireVersionId: approvalFixtureVersion?.questionnaireVersionId },
+    });
   });
 
   it("returns a donor summary and donation history for the authenticated donor", async () => {
@@ -135,8 +238,7 @@ describe("Donor profile API", () => {
     });
 
     try {
-      const today = new Date();
-      const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+      const exact18BirthDate = getExact18BirthDate();
       const invalidResponse = await request(app)
         .patch("/api/donor/profile")
         .set("Authorization", `Bearer ${donorToken}`)
@@ -189,14 +291,27 @@ describe("Donor profile API", () => {
     const date = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const staff = await prisma.hospitalStaff.findFirst({ where: { hospitalId: hospital.hospitalId } });
     if (!staff) return;
-    const slot = await prisma.appointmentSlot.create({
-      data: {
+    let slot = await prisma.appointmentSlot.findFirst({
+      where: {
         hospitalId: hospital.hospitalId,
-        createdByStaffId: staff.staffId,
         slotDate: new Date(`${date}T00:00:00.000Z`),
         time: "10:00",
-        capacity: 1,
       },
+    });
+    if (!slot) {
+      slot = await prisma.appointmentSlot.create({
+        data: {
+          hospitalId: hospital.hospitalId,
+          createdByStaffId: staff.staffId,
+          slotDate: new Date(`${date}T00:00:00.000Z`),
+          time: "10:00",
+          capacity: 1,
+        },
+      });
+    }
+    await prisma.appointmentSlot.update({
+      where: { slotId: slot.slotId },
+      data: { bookedCount: 0, status: "OPEN", capacity: 1 },
     });
 
     const response = await request(app)
@@ -238,6 +353,9 @@ describe("Donor profile API", () => {
       });
       expect(appointment.status).toBe("CANCELLED");
     } finally {
+      await prisma.questionnaireBookingAssociation.deleteMany({
+        where: { appointmentId },
+      });
       await prisma.appointment.delete({ where: { appointmentId } });
       await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
     }
@@ -315,8 +433,13 @@ describe("Donor profile API", () => {
           .get("/api/donor/profile")
           .set("Authorization", `Bearer ${donorToken}`);
         expect(profileResponse.status).toBe(200);
-        expect(new Date(profileResponse.body.data.user.lastSuccessfulDonationDate).toISOString().slice(0, 10))
-          .toBe(donation.donationDate.toISOString().slice(0, 10));
+        const actualDonationDate = profileResponse.body.data.user.lastSuccessfulDonationDate;
+        const actualDateOnly = typeof actualDonationDate === "string"
+          ? actualDonationDate.slice(0, 10)
+          : new Date(actualDonationDate).toISOString().slice(0, 10);
+        const expectedParts = getNairobiDateParts(donation.donationDate);
+        expect(actualDateOnly)
+          .toBe(`${expectedParts.year}-${String(expectedParts.month).padStart(2, "0")}-${String(expectedParts.day).padStart(2, "0")}`);
       }
 
       await prisma.donor.update({
@@ -397,8 +520,7 @@ describe("Donor profile API", () => {
     });
 
     try {
-      const today = new Date();
-      const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+      const exact18BirthDate = await getDatabaseExact18BirthDate();
       await prisma.donor.update({
         where: { donorId: donorUser.donor.donorId },
         data: { birthDate: exact18BirthDate },
@@ -439,6 +561,7 @@ describe("Donor profile API", () => {
     let isolatedToken;
     let slot;
     let appointmentId;
+    let isolatedApprovalFixture;
 
     try {
       isolatedUser = await prisma.user.create({
@@ -471,6 +594,7 @@ describe("Donor profile API", () => {
         env.JWT_SECRET,
         { expiresIn: env.JWT_EXPIRES_IN }
       );
+      isolatedApprovalFixture = await ensureActiveApproval(isolatedDonor);
 
       const nearbyResponse = await request(app)
         .get("/api/donor/appointments/nearby")
@@ -483,15 +607,21 @@ describe("Donor profile API", () => {
       const staff = await prisma.hospitalStaff.findFirst({ where: { hospitalId: hospital.hospitalId } });
       if (!staff) return;
       const slotDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      slot = await prisma.appointmentSlot.create({
-        data: {
-          hospitalId: hospital.hospitalId,
-          createdByStaffId: staff.staffId,
-          slotDate: new Date(Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate())),
-          time: "11:45",
-          capacity: 1,
-        },
+      const normalizedSlotDate = new Date(Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate()));
+      slot = await prisma.appointmentSlot.findFirst({
+        where: { hospitalId: hospital.hospitalId, slotDate: normalizedSlotDate, time: "11:45" },
       });
+      if (!slot) {
+        slot = await prisma.appointmentSlot.create({
+          data: {
+            hospitalId: hospital.hospitalId,
+            createdByStaffId: staff.staffId,
+            slotDate: normalizedSlotDate,
+            time: "11:45",
+            capacity: 1,
+          },
+        });
+      }
 
       const profileResponse = await request(app)
         .get("/api/donor/profile")
@@ -512,7 +642,29 @@ describe("Donor profile API", () => {
       expect(response.status).toBe(201);
       appointmentId = response.body.data.appointment.appointmentId;
     } finally {
+      if (isolatedApprovalFixture) {
+        await prisma.questionnaireBookingAssociation.deleteMany({
+          where: { approvalId: isolatedApprovalFixture.approval.approvalId },
+        });
+      }
       if (appointmentId) await prisma.appointment.delete({ where: { appointmentId } });
+      if (isolatedApprovalFixture) {
+        await prisma.questionnaireApproval.deleteMany({
+          where: { approvalId: isolatedApprovalFixture.approval.approvalId },
+        });
+        await prisma.questionnaireClinicalAssessment.deleteMany({
+          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
+        });
+        await prisma.questionnaireReview.deleteMany({
+          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
+        });
+        await prisma.donorQuestionnaireSubmission.deleteMany({
+          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
+        });
+        await prisma.questionnaireVersion.deleteMany({
+          where: { questionnaireVersionId: isolatedApprovalFixture.version.questionnaireVersionId },
+        });
+      }
       if (slot) await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
       if (isolatedUser) await prisma.user.delete({ where: { userId: isolatedUser.userId } });
     }
@@ -626,8 +778,7 @@ describe("Donor profile API", () => {
 
   it("keeps donor registration and login working", async () => {
     const email = `donor-test-${Date.now()}@hemoconnect.co.ke`;
-    const today = new Date();
-    const exact18BirthDate = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+    const exact18BirthDate = getExact18BirthDate();
 
     const exact18Registration = await request(app).post("/api/auth/register").send({
       firstName: "Exact",
