@@ -38,6 +38,25 @@ describe("Role-based access control", () => {
     expect(response.body.success).toBe(false);
   });
 
+  it("rejects public registration for the removed NGO role", async () => {
+    const response = await request(app)
+      .post("/api/auth/register")
+      .send({
+        firstName: "Test",
+        lastName: "Organization",
+        email: `removed-role-${Date.now()}@hemoconnect.test`,
+        phone: "0790000002",
+        password: "Password123!",
+        role: "NGO",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ msg: "Public registration is only available for donors" }),
+    ]));
+  });
+
   it("allows a donor to access a role-aware route", async () => {
     const response = await request(app)
       .get("/api/auth/role-access")
@@ -141,6 +160,7 @@ describe("Role-based access control", () => {
 
   it("allows an admin to change a hospital's status", async () => {
     const hospital = await prisma.hospital.findFirst({
+      where: { institutionType: "HOSPITAL" },
       select: { hospitalId: true, isActive: true },
     });
 
@@ -250,5 +270,28 @@ describe("Role-based access control", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.success).toBe(false);
+  });
+
+  it("validates IDs and status values on administrator status-change routes", async () => {
+    const responses = await Promise.all([
+      request(app)
+        .patch("/api/admin/users/invalid/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "ACTIVE" }),
+      request(app)
+        .patch("/api/admin/users/1/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "SUSPENDED" }),
+      request(app)
+        .patch("/api/admin/hospitals/invalid/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "ACTIVE" }),
+      request(app)
+        .patch("/api/admin/hospitals/1/status")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ status: "SUSPENDED" }),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([400, 400, 400, 400]);
   });
 });

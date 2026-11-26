@@ -4,20 +4,10 @@ const { body, param, query } = require("express-validator");
 const {
 	getHospitalStaffProfile,
 	getHospitalInventory,
-	getHospitalStockInsights,
-	updateHospitalStockSettings,
-	decideHospitalStockThreshold,
-	getHospitalStockReport,
+	getHospitalInventoryTransactions,
+	updateHospitalInventoryMinimum,
 	adjustHospitalInventory,
 	createHospitalRequest,
-	grantPatientAccess,
-	listHospitalEnquiries,
-	reviewHospitalEnquiry,
-	convertHospitalEnquiryToRequest,
-	listHospitalPatients,
-	listHospitalDonationNeeds,
-	createHospitalDonationNeed,
-	updateHospitalDonationNeed,
 	listHospitalRequests,
 	updateHospitalRequest,
 	fulfillHospitalRequest,
@@ -37,19 +27,8 @@ const router = express.Router();
 
 router.get("/profile", authenticate, authorize("HOSPITAL_STAFF"), getHospitalStaffProfile);
 router.get("/inventory", authenticate, authorize("HOSPITAL_STAFF"), getHospitalInventory);
-router.get("/stock-insights", authenticate, authorize("HOSPITAL_STAFF"), getHospitalStockInsights);
-router.patch(
-	"/stock-insights/settings",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	body("historicalWindowDays").isInt({ min: 7, max: 365 }).withMessage("Choose a history window from 7 to 365 days.").toInt(),
-	body("replenishmentLeadTimeDays").isInt({ min: 0, max: 365 }).withMessage("Lead time must be between 0 and 365 days.").toInt(),
-	body("safetyBufferDays").isInt({ min: 0, max: 365 }).withMessage("Safety buffer must be between 0 and 365 days.").toInt(),
-	validate,
-	updateHospitalStockSettings
-);
 router.get(
-	"/stock-insights/reports",
+	"/inventory/transactions",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
 	query("from").optional().isISO8601().withMessage("Enter a valid report start date."),
@@ -58,18 +37,16 @@ router.get(
 	query("to").custom((value, { req }) => !value || !req.query.from || new Date(value) >= new Date(req.query.from)).withMessage("Report end date must be on or after the start date."),
 	query("to").custom((value, { req }) => !value || !req.query.from || new Date(value) - new Date(req.query.from) <= 366 * 24 * 60 * 60 * 1000).withMessage("Choose a report period no longer than 366 days."),
 	validate,
-	getHospitalStockReport
+	getHospitalInventoryTransactions
 );
-router.post(
-	"/stock-insights/:inventoryId/decision",
+router.patch(
+	"/inventory/:inventoryId/minimum",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
 	param("inventoryId").isInt({ min: 1 }).withMessage("Invalid inventory ID."),
-	body("decision").isIn(["ACCEPT_RECOMMENDED", "RETAIN_CURRENT", "OVERRIDE"]).withMessage("Select a valid threshold decision."),
-	body("minimumUnits").if((value, { req }) => req.body.decision === "OVERRIDE").isInt({ min: 0, max: 100000 }).withMessage("Threshold must be between 0 and 100000 units.").toInt(),
-	body("reason").if((value, { req }) => ["RETAIN_CURRENT", "OVERRIDE"].includes(req.body.decision)).trim().isLength({ min: 3, max: 500 }).withMessage("Provide a reason of 3 to 500 characters for this decision."),
+	body("minimumUnits").isInt({ min: 0, max: 100000 }).withMessage("Minimum stock must be between 0 and 100000 units.").toInt(),
 	validate,
-	decideHospitalStockThreshold
+	updateHospitalInventoryMinimum
 );
 router.patch(
 	"/inventory",
@@ -77,7 +54,7 @@ router.patch(
 	authorize("HOSPITAL_STAFF"),
 	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
 	body("unitsChange").isInt({ min: -1000, max: 1000 }).withMessage("Stock change must be between -1000 and 1000 units.").toInt().custom((value) => value !== 0).withMessage("Stock change cannot be zero."),
-	body("reason").optional({ values: "falsy" }).trim().isLength({ max: 250 }).withMessage("Reason cannot exceed 250 characters."),
+	body("reason").trim().isLength({ min: 3, max: 250 }).withMessage("Provide a reason of 3 to 250 characters."),
 	validate,
 	adjustHospitalInventory
 );
@@ -85,11 +62,9 @@ router.post(
 	"/requests",
 	authenticate,
 	authorize("HOSPITAL_STAFF"),
-	body("patientId").optional({ values: "falsy" }).isInt({ min: 1 }).withMessage("Select a valid patient record.").toInt(),
-	body("patient").if((value, { req }) => !req.body.patientId).isObject().withMessage("Enter patient details or select a patient record."),
-	body("patient.firstName").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 2, max: 50 }).withMessage("Patient first name is required."),
-	body("patient.lastName").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 2, max: 50 }).withMessage("Patient last name is required."),
-	body("patient.phone").if((value, { req }) => !req.body.patientId).trim().isLength({ min: 10, max: 20 }).withMessage("Patient phone is required."),
+	body("patientId").custom((value) => value === undefined).withMessage("Patient records are no longer supported."),
+	body("patient").custom((value) => value === undefined).withMessage("Patient detail fields are no longer supported."),
+	body("patientReference").optional({ values: "falsy" }).trim().isLength({ max: 60 }).withMessage("Patient or case reference cannot exceed 60 characters."),
 	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
 	body("quantityRequired").isInt({ min: 1, max: 20 }).withMessage("Quantity must be between 1 and 20 units.").toInt(),
 	body("urgencyLevel").trim().isIn(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).withMessage("Select a valid urgency level."),
@@ -109,59 +84,6 @@ router.post(
 	createHospitalRequest
 );
 router.get("/requests", authenticate, authorize("HOSPITAL_STAFF"), listHospitalRequests);
-router.get("/patients", authenticate, authorize("HOSPITAL_STAFF"), listHospitalPatients);
-router.get("/donation-needs", authenticate, authorize("HOSPITAL_STAFF"), listHospitalDonationNeeds);
-router.post(
-	"/donation-needs",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	body("bloodType").trim().isIn(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).withMessage("Select a valid blood type."),
-	body("unitsNeeded").isInt({ min: 1, max: 10000 }).withMessage("Units needed must be between 1 and 10000.").toInt(),
-	body("neededBy").isISO8601().withMessage("Enter a valid needed-by date.").bail().toDate(),
-	body("notes").optional({ values: "falsy" }).trim().isLength({ max: 500 }).withMessage("Notes cannot exceed 500 characters."),
-	validate,
-	createHospitalDonationNeed
-);
-router.patch(
-	"/donation-needs/:needId",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("needId").isInt({ min: 1 }).withMessage("Invalid donation need ID."),
-	body("status").isIn(["OPEN", "IN_PROGRESS", "FULFILLED", "CANCELLED"]).withMessage("Select a valid donation need status."),
-	validate,
-	updateHospitalDonationNeed
-);
-router.get("/enquiries", authenticate, authorize("HOSPITAL_STAFF"), listHospitalEnquiries);
-router.post(
-	"/enquiries/:enquiryId/review",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("enquiryId").isInt({ min: 1 }).withMessage("Invalid enquiry ID."),
-	body("decision").isIn(["VERIFY", "REJECT"]).withMessage("Choose whether to verify or reject this enquiry."),
-	body("reviewNotes").optional({ values: "falsy" }).trim().isLength({ max: 1000 }).withMessage("Review notes cannot exceed 1000 characters."),
-	validate,
-	reviewHospitalEnquiry
-);
-router.post(
-	"/enquiries/:enquiryId/convert",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("enquiryId").isInt({ min: 1 }).withMessage("Invalid enquiry ID."),
-	body("latitude").optional({ values: "null" }).isFloat({ min: -90, max: 90 }).withMessage("Enter a valid latitude.").toFloat(),
-	body("longitude").optional({ values: "null" }).isFloat({ min: -180, max: 180 }).withMessage("Enter a valid longitude.").toFloat(),
-	validate,
-	convertHospitalEnquiryToRequest
-);
-router.post(
-	"/patients/:patientId/access",
-	authenticate,
-	authorize("HOSPITAL_STAFF"),
-	param("patientId").isInt({ min: 1 }).withMessage("Invalid patient ID."),
-	body("email").isEmail().withMessage("Enter the family representative's account email."),
-	body("relationship").trim().isLength({ min: 2, max: 80 }).withMessage("Enter the representative's relationship to the patient."),
-	validate,
-	grantPatientAccess
-);
 router.patch(
 	"/requests/:requestId",
 	authenticate,

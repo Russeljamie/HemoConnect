@@ -5,12 +5,14 @@ const {
   listNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  receiveSmsDeliveryReport,
 } = require("../controllers/notificationController");
 const authenticate = require("../middleware/authenticate");
 const { validate } = require("../middleware/authValidation");
 
 const router = express.Router();
 
+router.post("/sms/delivery-reports", receiveSmsDeliveryReport);
 router.get("/", authenticate, listNotifications);
 router.patch("/read-all", authenticate, markAllNotificationsRead);
 router.patch(

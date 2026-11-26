@@ -42,10 +42,10 @@ const templates = {
     text: `Hello ${name},\n\nThe email address on your HemoConnect account was changed to ${newEmail}. If you did not make this change, contact support.`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>The email address on your HemoConnect account was changed to ${escapeHtml(newEmail)}.</p><p>If you did not make this change, contact support.</p>`,
   }),
-  APPOINTMENT_BOOKED: ({ name, date, time, hospital, purpose }) => ({
+  APPOINTMENT_BOOKED: ({ name, date, time, hospital, purpose, reference }) => ({
     subject: "Your HemoConnect appointment was booked",
-    text: `Hello ${name},\n\nYour ${purpose} appointment is scheduled for ${formatDate(date)} at ${time} with ${hospital}. The hospital will confirm it.`,
-    html: `<p>Hello ${escapeHtml(name)},</p><p>Your ${escapeHtml(purpose)} appointment is scheduled for ${escapeHtml(formatDate(date))} at ${escapeHtml(time)} with ${escapeHtml(hospital)}. The hospital will confirm it.</p>`,
+    text: `Hello ${name},\n\nYour HemoConnect ${purpose} appointment has been scheduled successfully.\n\nHospital: ${hospital}\nDate: ${formatDate(date)}\nTime: ${time}\nReference: ${reference}\n\nPlease arrive on time and bring the required identification. Thank you for being a lifesaver!`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>Your HemoConnect ${escapeHtml(purpose)} appointment has been scheduled successfully.</p><p><strong>Hospital:</strong> ${escapeHtml(hospital)}<br><strong>Date:</strong> ${escapeHtml(formatDate(date))}<br><strong>Time:</strong> ${escapeHtml(time)}<br><strong>Reference:</strong> ${escapeHtml(reference)}</p><p>Please arrive on time and bring the required identification. Thank you for being a lifesaver!</p>`,
   }),
   APPOINTMENT_CONFIRMED: ({ name, date, time, hospital, purpose }) => ({
     subject: "Your HemoConnect appointment is confirmed",
@@ -57,20 +57,35 @@ const templates = {
     text: `Hello ${name},\n\nYour ${purpose} appointment at ${hospital} on ${formatDate(date)} at ${time} was cancelled.`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>Your ${escapeHtml(purpose)} appointment at ${escapeHtml(hospital)} on ${escapeHtml(formatDate(date))} at ${escapeHtml(time)} was cancelled.</p>`,
   }),
+  QUESTIONNAIRE_SUBMITTED: ({ name }) => ({
+    subject: "Your HemoConnect questionnaire was submitted",
+    text: `Hello ${name},\n\nYour donor questionnaire was submitted successfully and is awaiting KNBTS review. We will notify you when a decision is recorded.`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>Your donor questionnaire was submitted successfully and is awaiting KNBTS review. We will notify you when a decision is recorded.</p>`,
+  }),
+  QUESTIONNAIRE_APPROVED: ({ name, expiresAt }) => ({
+    subject: "Your HemoConnect questionnaire was approved",
+    text: `Hello ${name},\n\nYour donor questionnaire has been approved by KNBTS. Your approval is valid until ${formatDate(expiresAt)}. Sign in to HemoConnect to book an appointment.`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>Your donor questionnaire has been approved by KNBTS. Your approval is valid until ${escapeHtml(formatDate(expiresAt))}.</p><p>Sign in to HemoConnect to book an appointment.</p>`,
+  }),
+  QUESTIONNAIRE_DECLINED: ({ name }) => ({
+    subject: "An update to your HemoConnect questionnaire",
+    text: `Hello ${name},\n\nYour donor questionnaire was not approved by KNBTS. Sign in to HemoConnect to review the decision and any next steps.`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>Your donor questionnaire was not approved by KNBTS.</p><p>Sign in to HemoConnect to review the decision and any next steps.</p>`,
+  }),
+  DONATION_COMPLETED: ({ name, date, hospital }) => ({
+    subject: "Thank you for donating with HemoConnect",
+    text: `Hello ${name},\n\nYour blood donation on ${formatDate(date)} at ${hospital} has been recorded successfully. Thank you for helping save lives.`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>Your blood donation on ${escapeHtml(formatDate(date))} at ${escapeHtml(hospital)} has been recorded successfully.</p><p>Thank you for helping save lives.</p>`,
+  }),
+  INVENTORY_ALERT: ({ name, bloodType, units, minimumUnits, hospital }) => ({
+    subject: `Low blood inventory alert: ${bloodType}`,
+    text: `Hello ${name},\n\n${hospital} has ${units} units of ${bloodType} blood available, at or below the configured minimum of ${minimumUnits}. Please review the hospital inventory.`,
+    html: `<p>Hello ${escapeHtml(name)},</p><p>${escapeHtml(hospital)} has <strong>${escapeHtml(units)}</strong> units of ${escapeHtml(bloodType)} blood available, at or below the configured minimum of ${escapeHtml(minimumUnits)}.</p><p>Please review the hospital inventory.</p>`,
+  }),
   APPOINTMENT_RESCHEDULED: ({ name, date, time, hospital, purpose }) => ({
     subject: "Your HemoConnect appointment was rescheduled",
     text: `Hello ${name},\n\nYour ${purpose} appointment at ${hospital} has been rescheduled to ${formatDate(date)} at ${time}.`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>Your ${escapeHtml(purpose)} appointment at ${escapeHtml(hospital)} has been rescheduled to ${escapeHtml(formatDate(date))} at ${escapeHtml(time)}.</p>`,
-  }),
-  ASSISTANCE_ENQUIRY_VERIFIED: ({ name, enquiryId, hospital }) => ({
-    subject: "Your HemoConnect assistance enquiry was verified",
-    text: `Hello ${name},\n\nHospital staff at ${hospital} verified assistance enquiry #${enquiryId}. They can now create an official request. This verification alone has not yet alerted donors.`,
-    html: `<p>Hello ${escapeHtml(name)},</p><p>Hospital staff at ${escapeHtml(hospital)} verified assistance enquiry #${escapeHtml(enquiryId)}. They can now create an official request. This verification alone has not yet alerted donors.</p>`,
-  }),
-  ASSISTANCE_ENQUIRY_REJECTED: ({ name, enquiryId, hospital, reviewNotes }) => ({
-    subject: "Your HemoConnect assistance enquiry was reviewed",
-    text: `Hello ${name},\n\nHospital staff at ${hospital} could not verify assistance enquiry #${enquiryId}.${reviewNotes ? `\n\nReview note: ${reviewNotes}` : ""}\n\nPlease contact the hospital if you need more information.`,
-    html: `<p>Hello ${escapeHtml(name)},</p><p>Hospital staff at ${escapeHtml(hospital)} could not verify assistance enquiry #${escapeHtml(enquiryId)}.</p>${reviewNotes ? `<p>Review note: ${escapeHtml(reviewNotes)}</p>` : ""}<p>Please contact the hospital if you need more information.</p>`,
   }),
   EMERGENCY_REQUEST_CREATED: ({ name, requestId, bloodType, status, hospital }) => ({
     subject: "An official HemoConnect blood request was created",
@@ -86,11 +101,6 @@ const templates = {
     subject: `${urgency} HemoConnect blood donation request nearby`,
     text: `Hello ${name},\n\nYour donor profile matched official request #${requestId}: ${bloodType} blood is needed (${urgency.toLowerCase()}) about ${distanceKm} km away${hospital ? ` at ${hospital}` : ""}. Needed by ${formatDate(neededBy)}.\n\nSign in to review and respond: ${env.CLIENT_URL}/donor/alerts`,
     html: `<p>Hello ${escapeHtml(name)},</p><p>Your donor profile matched an official request: <strong>${escapeHtml(bloodType)}</strong> blood is needed (${escapeHtml(String(urgency).toLowerCase())}) about ${escapeHtml(distanceKm)} km away${hospital ? ` at ${escapeHtml(hospital)}` : ""}. Needed by ${escapeHtml(formatDate(neededBy))}.</p><p><a href="${escapeHtml(env.CLIENT_URL)}/donor/alerts">Sign in to review and respond</a></p>`,
-  }),
-  HOSPITAL_ASSISTANCE_ENQUIRY: ({ hospital, enquiryId, patientName, bloodType, urgency }) => ({
-    subject: `Assistance enquiry #${enquiryId} requires review`,
-    text: `${hospital} has received assistance enquiry #${enquiryId} for ${patientName}. Blood type: ${bloodType}; urgency: ${urgency}. Sign in to HemoConnect and open Hospital Requests to review it.`,
-    html: `<p>${escapeHtml(hospital)} has received assistance enquiry #${escapeHtml(enquiryId)} for ${escapeHtml(patientName)}.</p><p>Blood type: ${escapeHtml(bloodType)}; urgency: ${escapeHtml(urgency)}.</p><p>Sign in to HemoConnect and open Hospital Requests to review it.</p>`,
   }),
 };
 
@@ -131,23 +141,42 @@ const enqueueEmail = async (tx, recipientEmail, template, payload) => {
   });
 };
 
-const deliverOutboxEmail = async (email) => {
-  const mailTransport = getTransport();
+const deliverOutboxEmail = async (email, mailTransport = getTransport()) => {
   if (!mailTransport) throw new Error("SMTP is not configured; email remains queued.");
   const render = templates[email.template];
   if (!render) throw new Error(`Unknown email template in outbox: ${email.template}`);
   const rendered = render(email.payload);
-  await mailTransport.sendMail({
+  const result = await mailTransport.sendMail({
     from: env.EMAIL_FROM,
     to: email.recipientEmail,
+    messageId: `<hemoconnect-${email.emailId}@notifications.local>`,
     subject: rendered.subject,
     text: rendered.text,
     html: rendered.html,
   });
+  const acceptedRecipients = Array.isArray(result?.accepted)
+    ? result.accepted.map((recipient) =>
+      typeof recipient === "string" ? recipient.toLowerCase() : recipient?.address?.toLowerCase()
+    )
+    : [];
+  if (!acceptedRecipients.includes(email.recipientEmail.toLowerCase())) {
+    throw new Error("SMTP server did not accept the recipient.");
+  }
 };
 
-const processEmailOutbox = async (now = new Date()) => {
-  const mailTransport = getTransport();
+const safeEmailError = (error) => {
+  let message = String(error?.message || "SMTP delivery failed.");
+  for (const secret of [env.SMTP_PASSWORD, env.SMTP_USER]) {
+    if (secret) message = message.split(secret).join("[redacted]");
+  }
+  message = message.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]");
+  const code = typeof error?.code === "string" ? error.code : "SMTP_ERROR";
+  const responseCode = Number.isInteger(error?.responseCode) ? ` ${error.responseCode}` : "";
+  return `${code}${responseCode}: ${message}`.slice(0, 500);
+};
+
+const processEmailOutbox = async (now = new Date(), transportOverride = null, options = {}) => {
+  const mailTransport = transportOverride || getTransport();
   if (!mailTransport) return 0;
 
   await prisma.emailOutbox.updateMany({
@@ -155,7 +184,11 @@ const processEmailOutbox = async (now = new Date()) => {
       status: "PROCESSING",
       processingAt: { lt: new Date(now.getTime() - 10 * 60 * 1000) },
     },
-    data: { status: "QUEUED", processingAt: null },
+    data: {
+      status: "FAILED",
+      processingAt: null,
+      lastError: "Delivery outcome is unknown after a worker interruption; automatic resend was stopped to avoid duplicates.",
+    },
   });
 
   const emails = await prisma.emailOutbox.findMany({
@@ -163,6 +196,7 @@ const processEmailOutbox = async (now = new Date()) => {
       status: "QUEUED",
       nextAttemptAt: { lte: now },
       attempts: { lt: MAX_ATTEMPTS },
+      ...(options.recipientEmail ? { recipientEmail: options.recipientEmail } : {}),
     },
     orderBy: [{ createdAt: "asc" }, { emailId: "asc" }],
     take: BATCH_SIZE,
@@ -176,14 +210,22 @@ const processEmailOutbox = async (now = new Date()) => {
     });
     if (!claimed.count) continue;
 
+    let acceptedBySmtp = false;
     try {
-      await deliverOutboxEmail(email);
+      await deliverOutboxEmail(email, mailTransport);
+      acceptedBySmtp = true;
       await prisma.emailOutbox.update({
         where: { emailId: email.emailId },
         data: { status: "SENT", sentAt: new Date(), processingAt: null, lastError: null },
       });
       delivered += 1;
     } catch (error) {
+      if (acceptedBySmtp) {
+        console.error(
+          `Transactional email ${email.emailId} (${email.template}) was accepted by SMTP but its outbox state could not be recorded; manual reconciliation is required.`
+        );
+        continue;
+      }
       const attempts = email.attempts + 1;
       const failedPermanently = attempts >= MAX_ATTEMPTS;
       const retryDelayMinutes = Math.min(60, 2 ** attempts);
@@ -194,12 +236,11 @@ const processEmailOutbox = async (now = new Date()) => {
           attempts,
           nextAttemptAt: new Date(now.getTime() + retryDelayMinutes * 60 * 1000),
           processingAt: null,
-          lastError: String(error.message || error).slice(0, 1000),
+          lastError: safeEmailError(error),
         },
       });
       console.error(
-        `Transactional email ${email.emailId} (${email.template}) to ${email.recipientEmail} failed on attempt ${attempts}${failedPermanently ? " (no more retries)" : ""}:`,
-        error
+        `Transactional email ${email.emailId} (${email.template}) failed on attempt ${attempts}${failedPermanently ? " (no more retries)" : ""}: ${safeEmailError(error)}`
       );
     }
   }
@@ -229,4 +270,9 @@ module.exports = {
   isEmailConfigured,
   processEmailOutbox,
   startEmailWorker,
+  renderEmailTemplate: (template, payload) => {
+    const render = templates[template];
+    if (!render) throw new Error(`Unknown email template: ${template}`);
+    return render(payload);
+  },
 };

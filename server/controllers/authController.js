@@ -6,6 +6,8 @@ const jwt = require("jsonwebtoken");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
 const { enqueueEmail, isEmailConfigured } = require("../services/email");
+const { notifyUser } = require("../services/notificationDelivery");
+const { isActiveKnbtsCentre } = require("../utils/institution");
 
 const register = async (req, res, next) => {
   try {
@@ -64,22 +66,33 @@ const register = async (req, res, next) => {
             address: address.trim(),
           },
         });
-      } else if (role === "PATIENT") {
-        await tx.patient.create({
-          data: {
-            firstName: normalizedFirstName,
-            lastName: normalizedLastName,
-            phone: normalizedPhone,
-            userId: newUser.userId,
-          },
-        });
       } else {
         throw new Error("Unsupported public registration role");
       }
 
-      await enqueueEmail(tx, newUser.email, "WELCOME", {
-        name: `${newUser.firstName} ${newUser.lastName}`,
-        role: newUser.role === "DONOR" ? "donor" : "patient",
+      await tx.auditLog.create({
+        data: {
+          action: "ACCOUNT_REGISTERED",
+          entityType: "User",
+          entityId: String(newUser.userId),
+          actorUserId: newUser.userId,
+          details: { role: newUser.role },
+        },
+      });
+      await notifyUser(tx, {
+        userId: newUser.userId,
+        email: newUser.email,
+        phone: newUser.phone,
+        eventKey: `account-${newUser.userId}-registered`,
+        type: "ACCOUNT_REGISTERED",
+        title: "Welcome to HemoConnect",
+        message: "Your donor account is ready. Welcome to HemoConnect.",
+        emailTemplate: "WELCOME",
+        emailPayload: {
+          name: `${newUser.firstName} ${newUser.lastName}`,
+          role: "donor",
+        },
+        smsMessage: "Welcome to HemoConnect! Your account has been successfully created. Thank you for joining our blood donation community. Log in to access your account and get started.",
       });
       return newUser;
     });
@@ -117,6 +130,13 @@ const login = async (req, res, next) => {
       });
     }
 
+    if (user.role === "PATIENT") {
+      return res.status(403).json({
+        success: false,
+        message: "Patient accounts are no longer supported",
+      });
+    }
+
     const passwordMatches = await bcrypt.compare(password, user.password);
 
     if (!passwordMatches) {
@@ -131,6 +151,24 @@ const login = async (req, res, next) => {
         success: false,
         message: "Your account is not active",
       });
+    }
+
+    if (user.role === "KNBTS_STAFF") {
+      const staffProfile = await prisma.knbtsStaff.findUnique({
+        where: { userId: user.userId },
+        select: {
+          centre: {
+            select: { institutionType: true, isActive: true },
+          },
+        },
+      });
+
+      if (!staffProfile || !isActiveKnbtsCentre(staffProfile.centre)) {
+        return res.status(403).json({
+          success: false,
+          message: "KNBTS staff must be linked to an active KNBTS centre.",
+        });
+      }
     }
 
     const token = jwt.sign(

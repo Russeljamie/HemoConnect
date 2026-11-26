@@ -3,7 +3,6 @@ import { Bell } from "lucide-react";
 
 import { notificationsAPI } from "../services/api";
 import "./donor-pages.css";
-import "./ngo-pages.css";
 
 function getErrorMessage(error, fallback) {
   return error.response?.data?.message || fallback;
@@ -83,19 +82,19 @@ export default function NotificationsPage({ onUnreadCountChange }) {
     : notifications;
 
   return (
-    <section className="donor-page-panel ngo-campaigns-page ngo-notifications-page" aria-labelledby="notifications-heading">
+    <section className="donor-page-panel" aria-labelledby="notifications-heading">
       <header className="donor-page-heading">
         <div>
           <h1 id="notifications-heading">Notifications</h1>
           <p>Updates and reminders for your HemoConnect account.</p>
         </div>
-        <span className="ngo-notification-count">{unreadCount} unread</span>
+        <span className="notification-count">{unreadCount} unread</span>
       </header>
 
       {error && <div className="donor-page-message error" role="alert">{error}</div>}
 
-      <div className="ngo-notification-toolbar">
-        <label className="ngo-unread-filter">
+      <div className="notifications-toolbar">
+        <label className="notifications-unread-filter">
           <input type="checkbox" checked={unreadOnly} onChange={(event) => setUnreadOnly(event.target.checked)} />
           Unread only
         </label>
@@ -104,7 +103,7 @@ export default function NotificationsPage({ onUnreadCountChange }) {
         </button>
       </div>
 
-      <div className="ngo-notification-list" aria-live="polite">
+      <div className="notifications-list" aria-live="polite">
         {loading ? <div className="donor-page-state" role="status">Loading notifications...</div>
           : visibleNotifications.length === 0 ? (
             <div className="donor-page-state">
@@ -112,14 +111,13 @@ export default function NotificationsPage({ onUnreadCountChange }) {
               {unreadOnly ? "No unread notifications." : "You have no notifications yet."}
             </div>
           ) : visibleNotifications.map((notification) => (
-            <article className={`ngo-notification-row${notification.readAt ? " read" : " unread"}`} key={notification.notificationId}>
-              <div className="ngo-notification-copy">
-                <div className="ngo-notification-title-row">
+            <article className={`notification-row${notification.readAt ? " read" : " unread"}`} key={notification.notificationId}>
+              <div className="notification-copy">
+                <div className="notification-title-row">
                   <strong>{notification.title || "Notification"}</strong>
-                  {!notification.readAt && <span className="ngo-unread-indicator">Unread</span>}
+                  {!notification.readAt && <span className="notification-unread-indicator">Unread</span>}
                 </div>
                 <p>{notification.message}</p>
-                {notification.campaign && <span className="ngo-notification-campaign">{notification.campaign.name}</span>}
                 <time dateTime={notification.createdAt}>{formatDate(notification.createdAt)}</time>
               </div>
               {!notification.readAt && (
@@ -131,7 +129,7 @@ export default function NotificationsPage({ onUnreadCountChange }) {
           ))}
       </div>
 
-      <button className="ngo-notification-refresh" type="button" onClick={() => { setError(""); setLoading(true); setRefreshKey((current) => current + 1); }}>
+      <button className="notification-refresh" type="button" onClick={() => { setError(""); setLoading(true); setRefreshKey((current) => current + 1); }}>
         Refresh
       </button>
     </section>

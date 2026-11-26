@@ -2,9 +2,10 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../services/prisma");
 
 const OPEN_REQUEST_STATUSES = ["PENDING", "OPEN", "URGENT"];
-const USER_ROLES = ["DONOR", "PATIENT", "HOSPITAL_STAFF", "NGO", "ADMIN"];
+const USER_ROLES = ["DONOR", "HOSPITAL_STAFF", "KNBTS_STAFF", "ADMIN"];
 const USER_STATUSES = ["ACTIVE", "INACTIVE"];
 const HOSPITAL_STATUSES = ["ACTIVE", "INACTIVE"];
+const INSTITUTION_TYPES = ["HOSPITAL", "KNBTS_CENTRE"];
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
 const getAdminDashboard = async (req, res, next) => {
@@ -12,7 +13,7 @@ const getAdminDashboard = async (req, res, next) => {
     const [activeUsers, activeHospitals, inventory, openIssues, recentRequests] =
       await Promise.all([
         prisma.user.count({ where: { status: "ACTIVE" } }),
-        prisma.hospital.count({ where: { isActive: true } }),
+        prisma.hospital.count({ where: { isActive: true, institutionType: "HOSPITAL" } }),
         prisma.bloodInventory.findMany({
           where: { hospital: { is: { isActive: true } } },
           select: {
@@ -162,7 +163,13 @@ const listAdminUsers = async (req, res, next) => {
           hospitalStaff: {
             select: {
               designation: true,
-              hospital: { select: { hospitalId: true, name: true } },
+              hospital: { select: { hospitalId: true, name: true, institutionType: true } },
+            },
+          },
+          knbtsStaff: {
+            select: {
+              designation: true,
+              centre: { select: { hospitalId: true, name: true, institutionType: true } },
             },
           },
           createdAt: true,
@@ -278,11 +285,14 @@ const createAdminHospitalStaff = async (req, res, next) => {
     try {
       staff = await prisma.$transaction(async (tx) => {
         const hospital = await tx.hospital.findFirst({
-          where: { hospitalId, isActive: true },
-          select: { hospitalId: true, name: true },
+          where: { hospitalId, isActive: true, institutionType: "HOSPITAL" },
+          select: { hospitalId: true, name: true, institutionType: true },
         });
         if (!hospital) {
-          throw Object.assign(new Error("Select an active hospital."), { status: 400 });
+          throw Object.assign(
+            new Error("Select an active HOSPITAL institution; KNBTS centres cannot be assigned hospital staff."),
+            { status: 400 }
+          );
         }
 
         const user = await tx.user.create({
@@ -347,6 +357,7 @@ const listAdminHospitals = async (req, res, next) => {
   try {
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const status = typeof req.query.status === "string" ? req.query.status : "";
+    const institutionType = typeof req.query.institutionType === "string" ? req.query.institutionType : "";
     const page = Number(req.query.page || 1);
     const pageSize = Number(req.query.pageSize || 20);
 
@@ -357,17 +368,19 @@ const listAdminHospitals = async (req, res, next) => {
       !Number.isInteger(pageSize) ||
       pageSize < 1 ||
       pageSize > 100 ||
-      (status && !HOSPITAL_STATUSES.includes(status))
+      (status && !HOSPITAL_STATUSES.includes(status)) ||
+      (institutionType && !INSTITUTION_TYPES.includes(institutionType))
     ) {
       return res.status(400).json({
         success: false,
-        message: "Invalid hospital directory filters.",
+        message: "Invalid institution directory filters.",
       });
     }
 
     const where = {};
 
     if (status) where.isActive = status === "ACTIVE";
+    if (institutionType) where.institutionType = institutionType;
     if (search) {
       where.OR = [
         { name: { contains: search, mode: "insensitive" } },
@@ -385,6 +398,7 @@ const listAdminHospitals = async (req, res, next) => {
           name: true,
           location: true,
           contactInfo: true,
+          institutionType: true,
           isActive: true,
           createdAt: true,
         },
@@ -396,7 +410,7 @@ const listAdminHospitals = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Hospitals retrieved successfully.",
+      message: "Institutions retrieved successfully.",
       data: {
         hospitals,
         pagination: {
@@ -420,7 +434,7 @@ const updateAdminHospitalStatus = async (req, res, next) => {
     if (!Number.isSafeInteger(hospitalId) || hospitalId < 1 || !HOSPITAL_STATUSES.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "A valid hospital ID and status are required.",
+        message: "A valid institution ID and status are required.",
       });
     }
 
@@ -432,7 +446,7 @@ const updateAdminHospitalStatus = async (req, res, next) => {
     if (!existingHospital) {
       return res.status(404).json({
         success: false,
-        message: "Hospital not found.",
+        message: "Institution not found.",
       });
     }
 
@@ -444,6 +458,7 @@ const updateAdminHospitalStatus = async (req, res, next) => {
         name: true,
         location: true,
         contactInfo: true,
+        institutionType: true,
         isActive: true,
         createdAt: true,
       },
@@ -451,7 +466,7 @@ const updateAdminHospitalStatus = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Hospital status updated successfully.",
+      message: "Institution status updated successfully.",
       data: { hospital },
     });
   } catch (error) {
@@ -464,6 +479,7 @@ const createAdminHospital = async (req, res, next) => {
     const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
     const location = typeof req.body.location === "string" ? req.body.location.trim() : "";
     const contactInfo = typeof req.body.contactInfo === "string" ? req.body.contactInfo.trim() : "";
+    const institutionType = req.body.institutionType || "HOSPITAL";
     const latitude = Number(req.body.latitude);
     const longitude = Number(req.body.longitude);
 
@@ -471,6 +487,7 @@ const createAdminHospital = async (req, res, next) => {
       !name ||
       !location ||
       !contactInfo ||
+      !INSTITUTION_TYPES.includes(institutionType) ||
       !Number.isFinite(latitude) ||
       latitude < -90 ||
       latitude > 90 ||
@@ -480,7 +497,7 @@ const createAdminHospital = async (req, res, next) => {
     ) {
       return res.status(400).json({
         success: false,
-        message: "Provide hospital name, address, contact details, and valid map coordinates.",
+        message: "Provide an institution name, address, contact details, and valid map coordinates.",
       });
     }
 
@@ -494,12 +511,12 @@ const createAdminHospital = async (req, res, next) => {
     if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: "A hospital with this name and location is already registered.",
+        message: "An institution with this name and location is already registered.",
       });
     }
 
     const hospital = await prisma.hospital.create({
-      data: { name, location, contactInfo, latitude, longitude },
+      data: { name, location, contactInfo, latitude, longitude, institutionType },
       select: {
         hospitalId: true,
         name: true,
@@ -507,6 +524,7 @@ const createAdminHospital = async (req, res, next) => {
         contactInfo: true,
         latitude: true,
         longitude: true,
+        institutionType: true,
         isActive: true,
         createdAt: true,
       },
@@ -514,7 +532,7 @@ const createAdminHospital = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: "Hospital added to the directory.",
+      message: "Institution added to the directory.",
       data: { hospital },
     });
   } catch (error) {

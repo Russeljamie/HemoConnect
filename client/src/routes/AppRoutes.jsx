@@ -6,7 +6,6 @@ import NotFound from "../pages/NotFound";
 import ChangePassword from "../pages/ChangePassword";
 import ForgotPassword from "../pages/ForgotPassword";
 import ResetPassword from "../pages/ResetPassword";
-import { PublicAssistanceEnquiryPage } from "../pages/PublicAssistanceEnquiryPage";
 import App from "../App";
 import { getCurrentUser, getDashboardPath, isAuthenticated } from "../services/api";
 
@@ -34,7 +33,7 @@ function ProtectedRoute({ children, requiredRole, allowPasswordChange = false })
 
 function PublicRoute({ children }) {
   if (isAuthenticated()) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={getDashboardPath(getCurrentUser()?.role)} replace />;
   }
 
   return children;
@@ -63,15 +62,6 @@ function AppRoutes() {
         }
       />
 
-      <Route
-        path="/assistance"
-        element={
-          <PublicRoute>
-            <PublicAssistanceEnquiryPage />
-          </PublicRoute>
-        }
-      />
-
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
 
@@ -89,42 +79,6 @@ function AppRoutes() {
         path="/dashboard"
         element={
           <ProtectedRoute>
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/patient-dashboard"
-        element={
-          <ProtectedRoute>
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/patient/requests"
-        element={
-          <ProtectedRoute requiredRole="PATIENT">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/patient/appointments"
-        element={
-          <ProtectedRoute requiredRole="PATIENT">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/patient/medical-notes"
-        element={
-          <ProtectedRoute requiredRole="PATIENT">
             <App />
           </ProtectedRoute>
         }
@@ -149,6 +103,33 @@ function AppRoutes() {
       />
 
       <Route
+        path="/knbts-dashboard"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/knbts/questionnaire"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/knbts/questionnaire/:submissionId"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/hospital/inventory"
         element={
           <ProtectedRoute requiredRole="HOSPITAL_STAFF">
@@ -159,24 +140,11 @@ function AppRoutes() {
 
       <Route
         path="/hospital/stock-insights"
-        element={
-          <ProtectedRoute requiredRole="HOSPITAL_STAFF">
-            <App />
-          </ProtectedRoute>
-        }
+        element={<Navigate to="/hospital/inventory" replace />}
       />
 
       <Route
         path="/hospital/requests"
-        element={
-          <ProtectedRoute requiredRole="HOSPITAL_STAFF">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/hospital/donation-needs"
         element={
           <ProtectedRoute requiredRole="HOSPITAL_STAFF">
             <App />
@@ -197,51 +165,6 @@ function AppRoutes() {
         path="/hospital/staff"
         element={
           <ProtectedRoute requiredRole="HOSPITAL_STAFF">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/ngo-dashboard"
-        element={
-          <ProtectedRoute>
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/ngo/campaigns"
-        element={
-          <ProtectedRoute requiredRole="NGO">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/ngo/outreach"
-        element={
-          <ProtectedRoute requiredRole="NGO">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/ngo/notifications"
-        element={
-          <ProtectedRoute requiredRole="NGO">
-            <App />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/ngo/reports"
-        element={
-          <ProtectedRoute requiredRole="NGO">
             <App />
           </ProtectedRoute>
         }
@@ -320,7 +243,16 @@ function AppRoutes() {
       />
 
       <Route
-        path="/donor/campaigns"
+        path="/donor/questionnaire"
+        element={
+          <ProtectedRoute requiredRole="DONOR">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/donor/questionnaire/history"
         element={
           <ProtectedRoute requiredRole="DONOR">
             <App />

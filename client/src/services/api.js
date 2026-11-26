@@ -83,9 +83,8 @@ export const authAPI = {
 
 export const ROLE_DASHBOARDS = {
   DONOR: "/dashboard",
-  PATIENT: "/patient-dashboard",
   HOSPITAL_STAFF: "/hospital-dashboard",
-  NGO: "/ngo-dashboard",
+  KNBTS_STAFF: "/knbts-dashboard",
   ADMIN: "/admin-dashboard",
 };
 
@@ -136,43 +135,34 @@ export const donorAPI = {
     const result = await api.post(`/donor/alerts/${requestId}/respond`, { response });
     return result.data;
   },
-  getCampaigns: async () => {
-    const response = await api.get("/donor/campaigns");
+  getCurrentQuestionnaire: async () => {
+    const response = await api.get("/donor/questionnaire/current");
     return response.data;
   },
-  registerForCampaign: async (campaignId) => {
-    const response = await api.post(`/donor/campaigns/${campaignId}/register`);
+  createQuestionnaireDraft: async () => {
+    const response = await api.post("/donor/questionnaire/submissions", {});
     return response.data;
   },
-};
-
-export const patientAPI = {
-  getHospitals: async () => {
-    const response = await api.get("/patient/hospitals");
+  getQuestionnaireSubmissions: async () => {
+    const response = await api.get("/donor/questionnaire/submissions");
     return response.data;
   },
-  getProfile: async () => {
-    const response = await api.get("/patient/profile");
+  getQuestionnaireSubmission: async (submissionId) => {
+    const response = await api.get(`/donor/questionnaire/submissions/${submissionId}`);
     return response.data;
   },
-  getRequests: async () => {
-    const response = await api.get("/patient/requests");
+  saveQuestionnaireAnswers: async (submissionId, answers) => {
+    const response = await api.put(`/donor/questionnaire/submissions/${submissionId}/answers`, { answers });
     return response.data;
   },
-  getAppointments: async () => {
-    const response = await api.get("/patient/appointments");
+  deleteQuestionnaireAnswer: async (submissionId, questionId) => {
+    const response = await api.delete(`/donor/questionnaire/submissions/${submissionId}/answers/${questionId}`);
     return response.data;
   },
-  getMedicalNotes: async () => {
-    const response = await api.get("/patient/medical-notes");
-    return response.data;
-  },
-  createAssistanceEnquiry: async (enquiryData) => {
-    const response = await api.post("/patient/enquiries", enquiryData);
-    return response.data;
-  },
-  markNotificationRead: async (notificationId) => {
-    const response = await api.patch(`/patient/notifications/${notificationId}/read`);
+  submitQuestionnaire: async (submissionId) => {
+    const response = await api.post(`/donor/questionnaire/submissions/${submissionId}/submit`, {
+      declarationAcknowledged: true,
+    });
     return response.data;
   },
 };
@@ -201,20 +191,12 @@ export const hospitalAPI = {
     const response = await api.get("/hospital/inventory");
     return response.data;
   },
-  getStockInsights: async () => {
-    const response = await api.get("/hospital/stock-insights");
+  getInventoryTransactions: async (filters = {}) => {
+    const response = await api.get("/hospital/inventory/transactions", { params: filters });
     return response.data;
   },
-  updateStockSettings: async (settings) => {
-    const response = await api.patch("/hospital/stock-insights/settings", settings);
-    return response.data;
-  },
-  getStockReport: async (filters = {}) => {
-    const response = await api.get("/hospital/stock-insights/reports", { params: filters });
-    return response.data;
-  },
-  decideStockThreshold: async (inventoryId, decision) => {
-    const response = await api.post(`/hospital/stock-insights/${inventoryId}/decision`, decision);
+  updateInventoryMinimum: async (inventoryId, minimumUnits) => {
+    const response = await api.patch(`/hospital/inventory/${inventoryId}/minimum`, { minimumUnits });
     return response.data;
   },
   adjustInventory: async (adjustment) => {
@@ -225,44 +207,12 @@ export const hospitalAPI = {
     const response = await api.get("/hospital/requests");
     return response.data;
   },
-  getPatients: async () => {
-    const response = await api.get("/hospital/patients");
-    return response.data;
-  },
   createRequest: async (requestData) => {
     const response = await api.post("/hospital/requests", requestData);
     return response.data;
   },
-  getEnquiries: async () => {
-    const response = await api.get("/hospital/enquiries");
-    return response.data;
-  },
-  reviewEnquiry: async (enquiryId, decision, reviewNotes) => {
-    const response = await api.post(`/hospital/enquiries/${enquiryId}/review`, { decision, reviewNotes });
-    return response.data;
-  },
-  convertEnquiry: async (enquiryId, location) => {
-    const response = await api.post(`/hospital/enquiries/${enquiryId}/convert`, location);
-    return response.data;
-  },
   fulfillRequest: async (requestId, quantity, outcomeNotes) => {
     const response = await api.post(`/hospital/requests/${requestId}/fulfill`, { quantity, outcomeNotes });
-    return response.data;
-  },
-  createPatientAccess: async (patientId, email, relationship) => {
-    const response = await api.post(`/hospital/patients/${patientId}/access`, { email, relationship });
-    return response.data;
-  },
-  getDonationNeeds: async () => {
-    const response = await api.get("/hospital/donation-needs");
-    return response.data;
-  },
-  createDonationNeed: async (need) => {
-    const response = await api.post("/hospital/donation-needs", need);
-    return response.data;
-  },
-  updateDonationNeed: async (needId, status) => {
-    const response = await api.patch(`/hospital/donation-needs/${needId}`, { status });
     return response.data;
   },
   updateRequest: async (requestId, status) => {
@@ -299,53 +249,47 @@ export const hospitalAPI = {
   },
 };
 
-export const ngoAPI = {
+export const knbtsAPI = {
   getProfile: async () => {
-    const response = await api.get("/ngo/profile");
+    const response = await api.get("/knbts/profile");
     return response.data;
   },
-  getCampaigns: async () => {
-    const response = await api.get("/ngo/campaigns");
+  getQuestionnaireSubmissions: async (params = {}) => {
+    const response = await api.get("/knbts/questionnaire/submissions", { params });
     return response.data;
   },
-  getDonationNeeds: async () => {
-    const response = await api.get("/ngo/donation-needs");
+  getQuestionnaireDashboard: async () => {
+    const response = await api.get("/knbts/questionnaire/submissions", {
+      params: { page: 1, pageSize: 5, dashboard: "true" },
+    });
     return response.data;
   },
-  createCampaign: async (campaign) => {
-    const response = await api.post("/ngo/campaigns", campaign);
+  getQuestionnaireSubmission: async (submissionId) => {
+    const response = await api.get(`/knbts/questionnaire/submissions/${submissionId}`);
     return response.data;
   },
-  updateCampaign: async (campaignId, updates) => {
-    const response = await api.patch(`/ngo/campaigns/${campaignId}`, updates);
+  reviewQuestionnaire: async (submissionId, decision, declineReason, internalNote) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/review`, {
+      decision,
+      ...(declineReason ? { declineReason } : {}),
+      ...(internalNote ? { internalNote } : {}),
+    });
     return response.data;
   },
-  getOutreachActivities: async () => {
-    const response = await api.get("/ngo/outreach");
+  assessQuestionnaire: async (submissionId, assessment) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/assessment`, assessment);
     return response.data;
   },
-  createOutreachActivity: async (activity) => {
-    const response = await api.post("/ngo/outreach", activity);
+  issueQuestionnaireApproval: async (submissionId) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/approval`);
     return response.data;
   },
-  updateOutreachActivity: async (activityId, updates) => {
-    const response = await api.patch(`/ngo/outreach/${activityId}`, updates);
+  getQuestionnaireApprovals: async (params = {}) => {
+    const response = await api.get("/knbts/questionnaire/approvals", { params });
     return response.data;
   },
-  getNotifications: async () => {
-    const response = await api.get("/ngo/notifications");
-    return response.data;
-  },
-  markNotificationRead: async (notificationId) => {
-    const response = await api.patch(`/ngo/notifications/${notificationId}/read`);
-    return response.data;
-  },
-  markAllNotificationsRead: async () => {
-    const response = await api.patch("/ngo/notifications/read-all");
-    return response.data;
-  },
-  getReports: async (params) => {
-    const response = await api.get("/ngo/reports", { params });
+  getQuestionnaireApproval: async (approvalId) => {
+    const response = await api.get(`/knbts/questionnaire/approvals/${approvalId}`);
     return response.data;
   },
 };

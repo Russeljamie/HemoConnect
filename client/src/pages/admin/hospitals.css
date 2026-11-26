@@ -58,7 +58,7 @@
 .admin-hospital-create-fields,
 .admin-hospital-coordinate-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -71,7 +71,8 @@
   font-weight: 700;
 }
 
-.admin-hospital-create-form input {
+.admin-hospital-create-form input,
+.admin-hospital-create-form select {
   width: 100%;
   min-width: 0;
   height: 38px;
@@ -217,7 +218,7 @@
 
 .admin-hospitals-table {
   width: 100%;
-  min-width: 780px;
+  min-width: 900px;
   border-collapse: collapse;
 }
 

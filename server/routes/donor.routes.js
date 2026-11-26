@@ -1,4 +1,5 @@
 const express = require("express");
+const { body, param } = require("express-validator");
 
 const {
 	getDonorProfile,
@@ -12,11 +13,11 @@ const {
 	cancelDonorAppointment,
 	listDonorEmergencyAlerts,
 	respondToDonorAlert,
-	listDonorCampaigns,
-	registerForDonorCampaign,
 } = require("../controllers/donorController");
 const authenticate = require("../middleware/authenticate");
 const authorize = require("../middleware/authorize");
+const { validate } = require("../middleware/authValidation");
+const questionnaireController = require("../controllers/questionnaireController");
 
 const router = express.Router();
 
@@ -34,14 +35,62 @@ router.patch(
 	authorize("DONOR"),
 	cancelDonorAppointment
 );
-router.get("/alerts", authenticate, authorize("DONOR"), listDonorEmergencyAlerts);
-router.post("/alerts/:requestId/respond", authenticate, authorize("DONOR"), respondToDonorAlert);
-router.get("/campaigns", authenticate, authorize("DONOR"), listDonorCampaigns);
-router.post(
-	"/campaigns/:campaignId/register",
+router.get(
+	"/questionnaire/current",
 	authenticate,
 	authorize("DONOR"),
-	registerForDonorCampaign
+	questionnaireController.getPublishedQuestionnaire
 );
+router.post(
+	"/questionnaire/submissions",
+	authenticate,
+	authorize("DONOR"),
+	questionnaireController.createDraftSubmission
+);
+router.get(
+	"/questionnaire/submissions",
+	authenticate,
+	authorize("DONOR"),
+	questionnaireController.listOwnSubmissions
+);
+router.get(
+	"/questionnaire/submissions/:submissionId",
+	authenticate,
+	authorize("DONOR"),
+	param("submissionId").isInt({ min: 1 }).withMessage("Invalid submission ID."),
+	validate,
+	questionnaireController.getOwnSubmission
+);
+router.put(
+	"/questionnaire/submissions/:submissionId/answers",
+	authenticate,
+	authorize("DONOR"),
+	param("submissionId").isInt({ min: 1 }).withMessage("Invalid submission ID."),
+	body("answers").isArray({ min: 1, max: 200 }).withMessage("Provide between 1 and 200 answers."),
+	body("answers.*.questionId").isInt({ min: 1 }).withMessage("Each answer requires a valid question ID."),
+	validate,
+	questionnaireController.saveDraftAnswers
+);
+router.delete(
+	"/questionnaire/submissions/:submissionId/answers/:questionId",
+	authenticate,
+	authorize("DONOR"),
+	param("submissionId").isInt({ min: 1 }).withMessage("Invalid submission ID."),
+	param("questionId").isInt({ min: 1 }).withMessage("Invalid question ID."),
+	validate,
+	questionnaireController.deleteDraftAnswer
+);
+router.post(
+	"/questionnaire/submissions/:submissionId/submit",
+	authenticate,
+	authorize("DONOR"),
+	param("submissionId").isInt({ min: 1 }).withMessage("Invalid submission ID."),
+	body("declarationAcknowledged").custom((value) => value === true)
+		.withMessage("Confirm the declaration before submitting."),
+	validate,
+	questionnaireController.finalizeSubmission
+);
+router.get("/alerts", authenticate, authorize("DONOR"), listDonorEmergencyAlerts);
+router.post("/alerts/:requestId/respond", authenticate, authorize("DONOR"), respondToDonorAlert);
 
 module.exports = router;

@@ -1,5 +1,8 @@
 const prisma = require("./prisma");
 const env = require("../config/env");
+const { notifyUser } = require("./notificationDelivery");
+const { getEligibleEmergencyDonorIds } = require("./emergencyDonorEligibility");
+const { getCompatibleDonorBloodTypes } = require("../utils/bloodCompatibility");
 
 const OPEN_REQUEST_STATUSES = ["OPEN", "PENDING", "URGENT"];
 const EARTH_RADIUS_KM = 6371;
@@ -18,7 +21,7 @@ const calculateDistanceKm = (from, to) => {
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 };
 
-const sendDonorAlert = async (request, donor, wave, distanceKm) =>
+const sendDonorAlert = async (request, donor, wave, distanceKm, now) =>
   prisma.$transaction(async (tx) => {
     const match = await tx.requestMatch.create({
       data: {
@@ -27,45 +30,63 @@ const sendDonorAlert = async (request, donor, wave, distanceKm) =>
         wave,
         distanceKm,
         status: "NOTIFIED",
-        notifiedAt: new Date(),
+        notifiedAt: now,
       },
     });
 
-    await tx.notification.create({
-      data: {
-        type: "EMERGENCY_BLOOD_REQUEST",
-        channel: "IN_APP",
-        title: "Nearby blood request",
-        message: `${request.bloodType} blood is needed nearby (${distanceKm.toFixed(1)} km). Please respond to this ${request.urgencyLevel.toLowerCase()} request.`,
-        status: "SENT",
-        sentAt: new Date(),
-        userId: donor.userId,
+    const hospitalName = request.hospital?.name || "a nearby hospital";
+    await notifyUser(tx, {
+      userId: donor.userId,
+      email: donor.user.email,
+      phone: donor.user.phone,
+      eventKey: `emergency-${request.requestId}-donor-${donor.donorId}`,
+      type: "EMERGENCY_BLOOD_REQUEST",
+      title: "Nearby blood request",
+      message: `${request.bloodType} blood is needed nearby (${distanceKm.toFixed(1)} km). Please respond to this ${request.urgencyLevel.toLowerCase()} request.`,
+      requestId: request.requestId,
+      emailTemplate: "DONOR_EMERGENCY_ALERT",
+      emailPayload: {
+        name: `${donor.firstName} ${donor.lastName}`,
         requestId: request.requestId,
+        bloodType: request.bloodType,
+        urgency: request.urgencyLevel,
+        distanceKm: distanceKm.toFixed(1),
+        neededBy: request.neededBy,
+        hospital: request.hospital?.name || null,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        action: "EMERGENCY_DONOR_ALERT_QUEUED",
+        entityType: "EmergencyRequest",
+        entityId: String(request.requestId),
+        details: { donorId: donor.donorId, wave, distanceKm },
       },
     });
 
     return match;
   });
 
-const dispatchWave = async (request, wave) => {
+const dispatchWave = async (request, wave, now) => {
   const radiusKm = env.ALERT_WAVE_RADII_KM[wave - 1];
   const previousRadiusKm = wave > 1 ? env.ALERT_WAVE_RADII_KM[wave - 2] : 0;
   const donors = await prisma.donor.findMany({
         where: {
-          bloodType: request.bloodType,
+          bloodType: { in: getCompatibleDonorBloodTypes(request.bloodType) },
           isEligible: true,
           latitude: { not: null },
           longitude: { not: null },
-          user: { status: "ACTIVE" },
+          user: { status: "ACTIVE", role: "DONOR" },
           requestMatches: { none: { requestId: request.requestId } },
         },
         select: {
           donorId: true,
           userId: true,
+          firstName: true,
+          lastName: true,
           latitude: true,
           longitude: true,
-          points: true,
-          _count: { select: { donationRecords: true } },
+          user: { select: { email: true, phone: true, status: true } },
         },
       });
 
@@ -82,15 +103,18 @@ const dispatchWave = async (request, wave) => {
       distanceKm <= radiusKm
     )
     .sort((left, right) =>
-      right._count.donationRecords - left._count.donationRecords ||
-      right.points - left.points ||
-      left.distanceKm - right.distanceKm ||
-      left.donorId - right.donorId
+      left.distanceKm - right.distanceKm || left.donorId - right.donorId
     );
+  const eligibleDonorIds = await getEligibleEmergencyDonorIds(
+    prisma,
+    rankedDonors.map(({ donorId }) => donorId),
+    now
+  );
+  const eligibleDonors = rankedDonors.filter(({ donorId }) => eligibleDonorIds.has(donorId));
 
-  for (const donor of rankedDonors) {
+  for (const donor of eligibleDonors) {
     try {
-      await sendDonorAlert(request, donor, wave, donor.distanceKm);
+      await sendDonorAlert(request, donor, wave, donor.distanceKm, now);
     } catch (error) {
       if (error.code !== "P2002") throw error;
     }
@@ -98,10 +122,10 @@ const dispatchWave = async (request, wave) => {
 
   await prisma.emergencyRequest.update({
     where: { requestId: request.requestId },
-    data: { currentWave: wave, lastAlertAt: new Date() },
+    data: { currentWave: wave, lastAlertAt: now },
   });
 
-  return rankedDonors.length;
+  return eligibleDonors.length;
 };
 
 const processEmergencyRequest = async (requestId, now = new Date()) => {
@@ -118,6 +142,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
       currentWave: true,
       lastAlertAt: true,
       matches: { where: { status: "ACCEPTED" }, select: { matchId: true }, take: 1 },
+      hospital: { select: { name: true } },
     },
   });
 
@@ -138,7 +163,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
   }
 
   if (request.currentWave === 0) {
-    return dispatchWave(request, 1);
+    return dispatchWave(request, 1, now);
   }
 
   const intervalMs = env.ALERT_WAVE_INTERVAL_MINUTES * 60 * 1000;
@@ -148,7 +173,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
 
   const nextWave = request.currentWave + 1;
   if (nextWave > env.ALERT_WAVE_RADII_KM.length) return 0;
-  return dispatchWave(request, nextWave);
+  return dispatchWave(request, nextWave, now);
 };
 
 let workerTimer;

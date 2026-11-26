@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const { body } = require("express-validator");
 
 const {
@@ -67,13 +67,12 @@ router.post(
 router.get(
   "/role-access",
   authenticate,
-  authorize("DONOR", "PATIENT", "HOSPITAL_STAFF", "NGO", "ADMIN"),
+  authorize("DONOR", "HOSPITAL_STAFF", "KNBTS_STAFF", "ADMIN"),
   (req, res) => {
     const dashboardMap = {
       DONOR: "donor-dashboard",
-      PATIENT: "patient-dashboard",
       HOSPITAL_STAFF: "hospital-dashboard",
-      NGO: "ngo-dashboard",
+      KNBTS_STAFF: "knbts-dashboard",
       ADMIN: "admin-dashboard",
     };
 

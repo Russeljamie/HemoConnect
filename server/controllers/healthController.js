@@ -14,13 +14,11 @@ const checkHealth = async (req, res) => {
       200
     );
   } catch (error) {
+    console.error("Health check failed:", error);
     return sendError(
       res,
-      "Database connection failed",
-      503,
-      {
-        message: error.message,
-      }
+      "Service is temporarily unavailable",
+      503
     );
   }
 };

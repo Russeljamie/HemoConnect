@@ -4,8 +4,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  CircleCheck,
-  Clock3,
   Droplet,
   MapPin,
   Search,
@@ -219,7 +217,7 @@ export function DonorDonationsPage() {
 
   return (
     <section className="donor-page-panel" aria-labelledby="donor-donations-heading">
-      <header className="donor-page-heading"><div><h1 id="donor-donations-heading">Donation history</h1><p>Your recorded donations and rewards.</p></div><span>{pagination.total} records</span></header>
+      <header className="donor-page-heading"><div><h1 id="donor-donations-heading">Donation history</h1><p>Your recorded donations.</p></div><span>{pagination.total} records</span></header>
       <PageMessage error={error} />
       <div className="donor-table-wrap">
         <table className="donor-table">
@@ -249,7 +247,7 @@ export function DonorDonationsPage() {
         <div className="donor-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDonation(null); }}>
           <section className="donor-modal" role="dialog" aria-modal="true" aria-labelledby="donation-detail-heading">
             <header><h2 id="donation-detail-heading">Donation details</h2><button type="button" aria-label="Close donation details" onClick={() => setSelectedDonation(null)}><X size={19} /></button></header>
-            <dl><dt>Date</dt><dd>{formatDate(selectedDonation.donationDate)}</dd><dt>Blood type</dt><dd>{selectedDonation.bloodType}</dd><dt>Quantity</dt><dd>{selectedDonation.quantity} ml</dd><dt>Status</dt><dd>{selectedDonation.status}</dd><dt>Hospital</dt><dd>{selectedDonation.hospital || "Not recorded"}</dd><dt>Reward points</dt><dd>{selectedDonation.rewardPoints}</dd><dt>Notes</dt><dd>{selectedDonation.notes || "No notes"}</dd></dl>
+            <dl><dt>Date</dt><dd>{formatDate(selectedDonation.donationDate)}</dd><dt>Blood type</dt><dd>{selectedDonation.bloodType}</dd><dt>Quantity</dt><dd>{selectedDonation.quantity} ml</dd><dt>Status</dt><dd>{selectedDonation.status}</dd><dt>Hospital</dt><dd>{selectedDonation.hospital || "Not recorded"}</dd><dt>Notes</dt><dd>{selectedDonation.notes || "No notes"}</dd></dl>
           </section>
         </div>
       )}
@@ -260,6 +258,7 @@ export function DonorDonationsPage() {
 export function DonorAppointmentsPage() {
   const [appointments, setAppointments] = useState([]);
   const [donationEligibility, setDonationEligibility] = useState(null);
+  const [questionnaireStatus, setQuestionnaireStatus] = useState(null);
   const [location, setLocation] = useState(null);
   const [nearbyHospitals, setNearbyHospitals] = useState([]);
   const [selectedHospital, setSelectedHospital] = useState(null);
@@ -295,6 +294,20 @@ export function DonorAppointmentsPage() {
       })
       .catch((requestError) => {
         if (!cancelled) setError(errorMessage(requestError, "Unable to load your donation interval."));
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    donorAPI.getQuestionnaireSubmissions()
+      .then((response) => {
+        if (cancelled) return;
+        const submissions = response.data?.submissions || [];
+        setQuestionnaireStatus(submissions[0]?.status || null);
+      })
+      .catch(() => {
+        if (!cancelled) setQuestionnaireStatus(null);
       });
     return () => { cancelled = true; };
   }, []);
@@ -485,6 +498,15 @@ export function DonorAppointmentsPage() {
           : "Hospital staff will make the final medical clearance decision for every donation."}
         {" "}This scheduling interval does not replace hospital medical screening.
       </p>
+      {questionnaireStatus && (
+        <p className="donor-location-map-help">
+          Questionnaire status: <strong>{questionnaireStatus}</strong>.
+          {questionnaireStatus === "PENDING" && " Your questionnaire is awaiting KNBTS review, so approval has not been issued yet."}
+          {questionnaireStatus === "APPROVED" && " KNBTS has reviewed this submission; final booking eligibility is confirmed by the server."}
+          {questionnaireStatus === "DECLINED" && " This submission was declined. Complete a new questionnaire only when eligible."}
+          {questionnaireStatus === "DRAFT" && " Complete and submit the questionnaire before booking with an approval."}
+        </p>
+      )}
       <form className="donor-appointment-form" onSubmit={bookAppointment}>
         <label>Available appointment slot
           <select value={form.slotId} onChange={(event) => setForm({ ...form, slotId: event.target.value })} required disabled={!selectedHospital || slotsLoading}>
@@ -572,62 +594,21 @@ export function DonorAlertsPage() {
         : alerts.length === 0 ? <div className="donor-page-state">There are no matching open requests right now.</div>
           : <div className="donor-alert-list">{alerts.map((alert) => <article className="donor-alert-row" key={alert.requestId}>
             <div className="donor-alert-symbol"><AlertTriangle size={19} /></div>
-            <div className="donor-alert-content"><strong>{alert.bloodType} blood needed · {alert.urgencyLevel}</strong><span>{alert.hospital?.name || "Nearby request"}</span><small>{alert.distanceKm.toFixed(1)} km away · Alert wave {alert.wave}</small></div>
+            <div className="donor-alert-content">
+              <strong>{alert.bloodType} blood needed · {alert.urgencyLevel}</strong>
+              <span>{alert.hospital?.name || "Nearby request"}</span>
+              <small>{Number.isFinite(alert.distanceKm) ? `${alert.distanceKm.toFixed(1)} km away` : "Nearby"} · Alert wave {alert.wave}</small>
+              <small>{alert.hospital?.location || (Number.isFinite(alert.latitude) && Number.isFinite(alert.longitude)
+                ? `${alert.latitude.toFixed(4)}, ${alert.longitude.toFixed(4)}`
+                : "Location not provided")}</small>
+              {alert.notes && <p>{alert.notes}</p>}
+            </div>
             <div className="donor-alert-meta"><span>{alert.quantityRequired} units</span><small>Needed by {formatDate(alert.neededBy)}</small>
               {alert.matchStatus === "NOTIFIED" ? <div className="donor-alert-actions">
                 <button type="button" className="primary-button" disabled={busyRequestId === alert.requestId} onClick={() => respondToAlert(alert.requestId, "ACCEPT")}>Accept</button>
                 <button type="button" className="donor-text-action" disabled={busyRequestId === alert.requestId} onClick={() => respondToAlert(alert.requestId, "DECLINE")}>Decline</button>
               </div> : <strong className="donor-alert-response">{alert.matchStatus.toLowerCase()}</strong>}
             </div>
-          </article>)}</div>}
-    </section>
-  );
-}
-
-export function DonorCampaignsPage() {
-  const [campaigns, setCampaigns] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [busyCampaign, setBusyCampaign] = useState(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    donorAPI.getCampaigns()
-      .then((response) => { if (!cancelled) setCampaigns(response.data.campaigns || []); })
-      .catch((requestError) => { if (!cancelled) setError(errorMessage(requestError, "Unable to load campaigns.")); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [refreshKey]);
-
-  async function register(campaign) {
-    if (!window.confirm(`Register for ${campaign.name}?`)) return;
-    setBusyCampaign(campaign.campaignId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await donorAPI.registerForCampaign(campaign.campaignId);
-      setNotice(response.message || "Campaign registration confirmed.");
-      setRefreshKey((value) => value + 1);
-    } catch (requestError) {
-      setError(errorMessage(requestError, "Unable to register for this campaign."));
-    } finally {
-      setBusyCampaign(null);
-    }
-  }
-
-  return (
-    <section className="donor-page-panel" aria-labelledby="donor-campaigns-heading">
-      <header className="donor-page-heading"><div><h1 id="donor-campaigns-heading">Campaigns</h1><p>Upcoming blood drives and community campaigns.</p></div><span>{campaigns.length} available</span></header>
-      <PageMessage error={error} notice={notice} />
-      {loading ? <div className="donor-page-state" role="status">Loading campaigns...</div>
-        : campaigns.length === 0 ? <div className="donor-page-state">No upcoming campaigns are available.</div>
-          : <div className="donor-campaign-list">{campaigns.map((campaign) => <article className="donor-campaign-row" key={campaign.campaignId}>
-            <div className="donor-campaign-date"><span>{formatDate(campaign.startDate).split(" ")[0]}</span><strong>{formatDate(campaign.startDate).split(" ")[1]}</strong></div>
-            <div className="donor-campaign-content"><div className="donor-campaign-title"><h2>{campaign.name}</h2><span>{campaign.status}</span></div><p>{campaign.description}</p><div className="donor-campaign-meta"><span><MapPin size={14} />{campaign.location}</span><span><Clock3 size={14} />{formatDate(campaign.startDate)} – {formatDate(campaign.endDate)}</span>{campaign.organizer && <span>{campaign.organizer}</span>}</div><small>{campaign.registeredDonors} donors registered</small></div>
-            <button type="button" className={campaign.registration ? "donor-registered-button" : "primary-button"} disabled={Boolean(campaign.registration) || busyCampaign === campaign.campaignId} onClick={() => register(campaign)}>{campaign.registration ? <><CircleCheck size={16} />Registered</> : busyCampaign === campaign.campaignId ? "Registering..." : "Register"}</button>
           </article>)}</div>}
     </section>
   );

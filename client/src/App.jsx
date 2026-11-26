@@ -10,7 +10,6 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  Megaphone,
   UserRound,
   X,
   ClipboardList,
@@ -23,34 +22,34 @@ import {
   adminAPI,
   donorAPI,
   getCurrentUser,
+  getDashboardPath,
   hospitalAPI,
+  knbtsAPI,
   logout,
-  ngoAPI,
   notificationsAPI,
-  patientAPI,
 } from "./services/api";
 import AdminUsers from "./pages/admin/Users";
 import AdminHospitals from "./pages/admin/Hospitals";
 import AdminInventory from "./pages/admin/Inventory";
-import HospitalStockInsightsPage from "./pages/HospitalStockInsightsPage";
 import {
   HospitalAppointmentsPage,
-  HospitalDonationNeedsPage,
   HospitalInventoryPage,
   HospitalRequestsPage,
   HospitalStaffPage,
 } from "./pages/HospitalPages";
-import { NgoCampaignsPage, NgoNotificationsPage, NgoOutreachPage, NgoReportsPage } from "./pages/NgoPages";
-import { PatientRequestsPage } from "./pages/PatientPages";
-import { PatientAppointmentsPage, PatientMedicalNotesPage } from "./pages/PatientRecordPages";
 import NotificationsPage from "./pages/NotificationsPage";
 import {
   DonorProfilePage,
   DonorDonationsPage,
   DonorAppointmentsPage,
   DonorAlertsPage,
-  DonorCampaignsPage,
 } from "./pages/DonorPages";
+import { DonorQuestionnairePage } from "./pages/QuestionnairePages";
+import {
+  KnbtsDashboardPage,
+  KnbtsQuestionnaireQueuePage,
+  KnbtsQuestionnaireReviewPage,
+} from "./pages/KnbtsQuestionnairePages";
 import "./App.css";
 import "./donor-shell.css";
 
@@ -62,16 +61,15 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "My Profile", icon: UserRound },
+      { label: "Questionnaire", icon: ClipboardList },
+      { label: "Questionnaire History", icon: ClipboardList },
       { label: "Donation History", icon: Droplet },
       { label: "Appointments", icon: CalendarDays },
       { label: "Emergency Alerts", icon: HeartPulse },
-      { label: "Campaigns", icon: Megaphone },
     ],
     stats: [
       { label: "Total Donations", value: "—", accent: "blue", icon: Droplet },
-      { label: "Reward Points", value: "—", accent: "gold", icon: HeartPulse },
       { label: "Next Appointment", value: "—", accent: "green", icon: CalendarDays },
-      { label: "Active Campaigns", value: "—", accent: "purple", icon: Megaphone },
     ],
     primaryTitle: "Recent Donations",
     primarySubtitle: "Your latest donation activity",
@@ -87,44 +85,6 @@ const roleConfig = {
     ctaAction: "Appointments",
     bloodBadge: "O+",
   },
-  PATIENT: {
-    title: "Patient Dashboard",
-    subtitle: "Track requests and care updates.",
-    welcome: "Welcome",
-    nav: [
-      { label: "Dashboard", icon: LayoutDashboard },
-      { label: "Request Assistance", icon: ClipboardList },
-      { label: "Appointments", icon: CalendarDays },
-      { label: "Medical Notes", icon: ShieldCheck },
-      { label: "Notifications", icon: Bell },
-    ],
-    stats: [
-      { label: "Open Requests", value: "3", accent: "blue", icon: ClipboardList },
-      { label: "Urgent Needs", value: "1", accent: "gold", icon: HeartPulse },
-      { label: "Upcoming Visits", value: "2", accent: "green", icon: CalendarDays },
-      { label: "Notifications", value: "5", accent: "purple", icon: Bell },
-    ],
-    primaryTitle: "Active Blood Requests",
-    primarySubtitle: "Your current need status",
-    primaryAction: "My Requests",
-    primaryType: "list",
-    primaryItems: [
-      { title: "A+ Request", meta: "Kenyatta National Hospital", sub: "Urgent • 2 units needed", status: "In progress" },
-      { title: "O- Request", meta: "Mbagathi Hospital", sub: "Routine • 1 unit needed", status: "Matched" },
-      { title: "B+ Request", meta: "Aga Khan Hospital", sub: "Follow-up • 2 units needed", status: "Pending" },
-    ],
-    secondaryTitle: "Care Updates",
-    secondarySubtitle: "Recent communications",
-    secondaryAction: "Notifications",
-    secondaryItems: [
-      { title: "Donor match identified", meta: "Blood bank team", sub: "Available within 30 minutes", action: "View" },
-      { title: "Appointment confirmed", meta: "Care coordinator", sub: "Tuesday 10:30 AM", action: "Open" },
-    ],
-    secondaryCta: "Open Notifications",
-    ctaLabel: "Request Assistance",
-    ctaAction: "Request Assistance",
-    bloodBadge: "A+",
-  },
   HOSPITAL_STAFF: {
     title: "Hospital Dashboard",
     subtitle: "Inventory and donor coordination.",
@@ -132,9 +92,7 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "Inventory", icon: Droplet },
-      { label: "Stock Insights", icon: HeartPulse },
       { label: "Requests", icon: ClipboardList },
-      { label: "Donation Needs", icon: HeartPulse },
       { label: "Appointments", icon: CalendarDays },
       { label: "Staff", icon: Users },
     ],
@@ -165,42 +123,16 @@ const roleConfig = {
     ctaAction: "Inventory",
     bloodBadge: "Inventory",
   },
-  NGO: {
-    title: "NGO Dashboard",
-    subtitle: "Campaigns and community outreach.",
+  KNBTS_STAFF: {
+    title: "KNBTS Staff Dashboard",
+    subtitle: "Questionnaire review overview.",
     welcome: "Welcome",
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
-      { label: "Campaigns", icon: Megaphone },
-      { label: "Outreach", icon: Users },
-      { label: "Reports", icon: ClipboardList },
+      { label: "Questionnaire Queue", icon: ClipboardList },
       { label: "Notifications", icon: Bell },
     ],
-    stats: [
-      { label: "Campaigns", value: "6", accent: "blue", icon: Megaphone },
-      { label: "Volunteers", value: "74", accent: "gold", icon: Users },
-      { label: "Blood Drives", value: "3", accent: "green", icon: CalendarDays },
-      { label: "Donors Reach", value: "1200", accent: "purple", icon: HeartPulse },
-    ],
-    primaryTitle: "Upcoming Campaigns",
-    primarySubtitle: "Community donor events",
-    primaryAction: "Campaigns",
-    primaryType: "list",
-    primaryItems: [
-      { title: "Nairobi Blood Drive", meta: "KNH • 20 March 2026", sub: "Recruiting donors", status: "Open" },
-      { title: "Community Blood Drive", meta: "Westlands • 5 April 2026", sub: "Target 120 donors", status: "Planned" },
-    ],
-    secondaryTitle: "Community Outreach",
-    secondarySubtitle: "Volunteer and partner activity",
-    secondaryAction: "Outreach",
-    secondaryItems: [
-      { title: "School outreach", meta: "30 volunteers enrolled", sub: "Campaign packet prepared", action: "Review" },
-      { title: "Corporate partners", meta: "3 partners active", sub: "Blood drive sponsorship", action: "Open" },
-    ],
-    secondaryCta: "View Community Outreach",
-    ctaLabel: "Create Campaign",
-    ctaAction: "Campaigns",
-    bloodBadge: "Community",
+    stats: [],
   },
   ADMIN: {
     title: "Admin Dashboard",
@@ -209,7 +141,7 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "Users", icon: Users },
-      { label: "Hospitals", icon: Building2 },
+      { label: "Institutions", icon: Building2 },
       { label: "Inventory", icon: Droplet },
       { label: "Reports", icon: ClipboardList },
     ],
@@ -243,15 +175,14 @@ function App() {
   const [message, setMessage] = useState("");
   const [donorProfile, setDonorProfile] = useState(null);
   const [donorAlerts, setDonorAlerts] = useState([]);
-  const [donorCampaigns, setDonorCampaigns] = useState([]);
   const [donorDashboardLoading, setDonorDashboardLoading] = useState(true);
   const [donorDashboardError, setDonorDashboardError] = useState("");
   const [donorDashboardRefresh, setDonorDashboardRefresh] = useState(0);
-  const [patientProfile, setPatientProfile] = useState(null);
   const [globalNotifications, setGlobalNotifications] = useState([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [hospitalProfile, setHospitalProfile] = useState(null);
-  const [ngoProfile, setNgoProfile] = useState(null);
+  const [knbtsProfile, setKnbtsProfile] = useState(null);
+  const [knbtsProfileLoading, setKnbtsProfileLoading] = useState(false);
   const [adminDashboard, setAdminDashboard] = useState(null);
 
   const user = getCurrentUser() || {};
@@ -264,29 +195,21 @@ function App() {
   const isAdminHospitalsPage = role === "ADMIN" && location.pathname === "/admin/hospitals";
   const isAdminInventoryPage = role === "ADMIN" && location.pathname === "/admin/inventory";
   const isHospitalInventoryPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/inventory";
-  const isHospitalStockInsightsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/stock-insights";
   const isHospitalRequestsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/requests";
-  const isHospitalDonationNeedsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/donation-needs";
   const isHospitalAppointmentsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/appointments";
   const isHospitalStaffPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/staff";
-  const isPatientAppointmentsPage = role === "PATIENT" && location.pathname === "/patient/appointments";
-  const isPatientMedicalNotesPage = role === "PATIENT" && location.pathname === "/patient/medical-notes";
   const isNotificationPage = location.pathname === "/notifications";
-  const isNgoCampaignsPage = role === "NGO" && location.pathname === "/ngo/campaigns";
-  const isNgoOutreachPage = role === "NGO" && location.pathname === "/ngo/outreach";
-  const isNgoNotificationsPage = role === "NGO" && location.pathname === "/ngo/notifications";
-  const isNgoReportsPage = role === "NGO" && location.pathname === "/ngo/reports";
+  const isKnbtsQuestionnairePage = role === "KNBTS_STAFF" && (
+    location.pathname === "/knbts/questionnaire" ||
+    location.pathname.startsWith("/knbts/questionnaire/")
+  );
   const donorPage = {
     "/donor/profile": { label: "My Profile", subtitle: "Manage your donor details." },
+    "/donor/questionnaire": { label: "Questionnaire", subtitle: "Complete the HemoConnect health questionnaire." },
+    "/donor/questionnaire/history": { label: "Questionnaire History", subtitle: "Review submission status and KNBTS decisions." },
     "/donor/donations": { label: "Donation History", subtitle: "Review your recorded donations." },
     "/donor/appointments": { label: "Appointments", subtitle: "Manage your donation visits." },
     "/donor/alerts": { label: "Emergency Alerts", subtitle: "Find requests that match your blood type." },
-    "/donor/campaigns": { label: "Campaigns", subtitle: "Browse and join blood donation campaigns." },
-  }[location.pathname];
-  const patientPage = {
-    "/patient/requests": { label: "Request Assistance", subtitle: "Submit an enquiry and track hospital-verified requests." },
-    "/patient/appointments": { label: "Appointments", subtitle: "Review appointments recorded by your care team." },
-    "/patient/medical-notes": { label: "Medical Notes", subtitle: "Review notes recorded for your appointments and blood requests." },
   }[location.pathname];
   const currentRole = roleConfig[role] || roleConfig.DONOR;
   const roleDisplay = role
@@ -311,7 +234,6 @@ function App() {
           .then((response) => {
             if (cancelled) return;
             setDonorProfile(response?.data || null);
-            setPatientProfile(null);
           })
           .catch((error) => reportError("Profile", error)),
         donorAPI.getAlerts()
@@ -319,11 +241,6 @@ function App() {
             if (!cancelled) setDonorAlerts(response?.data?.alerts || []);
           })
           .catch((error) => reportError("Emergency alerts", error)),
-        donorAPI.getCampaigns()
-          .then((response) => {
-            if (!cancelled) setDonorCampaigns(response?.data?.campaigns || []);
-          })
-          .catch((error) => reportError("Campaigns", error)),
       ]).then((errors) => {
         if (!cancelled) setDonorDashboardError(errors.filter(Boolean).join(" "));
       }).finally(() => {
@@ -333,28 +250,12 @@ function App() {
       return () => { cancelled = true; };
     }
 
-    if (role === "PATIENT") {
-      patientAPI
-        .getProfile()
-        .then((response) => {
-          setPatientProfile(response?.data || null);
-          setDonorProfile(null);
-          setHospitalProfile(null);
-        })
-        .catch(() => {
-          setMessage("Unable to load patient details. Please try again later.");
-        });
-      return;
-    }
-
     if (role === "HOSPITAL_STAFF") {
       hospitalAPI
         .getProfile()
         .then((response) => {
           setHospitalProfile(response?.data || null);
           setDonorProfile(null);
-          setPatientProfile(null);
-          setNgoProfile(null);
         })
         .catch(() => {
           setMessage("Unable to load hospital staff details. Please try again later.");
@@ -362,19 +263,22 @@ function App() {
       return;
     }
 
-    if (role === "NGO") {
-      ngoAPI
-        .getProfile()
+    if (role === "KNBTS_STAFF") {
+      let cancelled = false;
+      setKnbtsProfileLoading(true);
+      knbtsAPI.getProfile()
         .then((response) => {
-          setNgoProfile(response?.data || null);
-          setDonorProfile(null);
-          setPatientProfile(null);
-          setHospitalProfile(null);
+          if (!cancelled) setKnbtsProfile(response?.data?.staff || null);
         })
-        .catch(() => {
-          setMessage("Unable to load NGO details. Please try again later.");
+        .catch((error) => {
+          if (!cancelled) {
+            setMessage(error.response?.data?.message || "Unable to load KNBTS centre details.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setKnbtsProfileLoading(false);
         });
-      return;
+      return () => { cancelled = true; };
     }
 
     if (role === "ADMIN") {
@@ -388,6 +292,28 @@ function App() {
         });
     }
   }, [role, donorDashboardRefresh]);
+
+  useEffect(() => {
+    if (role !== "DONOR" || location.pathname !== "/dashboard") return undefined;
+    let cancelled = false;
+    const refreshAlerts = () => {
+      donorAPI.getAlerts()
+        .then((response) => {
+          if (!cancelled) setDonorAlerts(response?.data?.alerts || []);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            const detail = error.response?.data?.message || error.message;
+            setDonorDashboardError(`Emergency alerts${detail ? `: ${detail}` : " could not be loaded."}`);
+          }
+        });
+    };
+    const intervalId = window.setInterval(refreshAlerts, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [role, location.pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -415,22 +341,10 @@ function App() {
           icon: Droplet,
         },
         {
-          label: "Reward Points",
-          value: String(donorProfile.metrics?.rewardPoints ?? 0),
-          accent: "gold",
-          icon: HeartPulse,
-        },
-        {
           label: "Next Appointment",
           value: donorProfile.metrics?.nextAppointment || "Not Scheduled",
           accent: "green",
           icon: CalendarDays,
-        },
-        {
-          label: "Active Campaigns",
-          value: String(donorCampaigns.length),
-          accent: "purple",
-          icon: Megaphone,
         },
       ]
     : currentRole.stats;
@@ -444,43 +358,6 @@ function App() {
       }))
     : currentRole.primaryItems;
 
-  const patientStats = patientProfile
-    ? [
-        {
-          label: "Open Requests",
-          value: String(patientProfile.metrics?.openRequests ?? 0),
-          accent: "blue",
-          icon: ClipboardList,
-        },
-        {
-          label: "Urgent Needs",
-          value: String(patientProfile.metrics?.urgentNeeds ?? 0),
-          accent: "gold",
-          icon: HeartPulse,
-        },
-        {
-          label: "Upcoming Visits",
-          value: String(patientProfile.metrics?.upcomingVisits ?? 0),
-          accent: "green",
-          icon: CalendarDays,
-        },
-        {
-          label: "Notifications",
-          value: String(patientProfile.metrics?.notifications ?? 0),
-          accent: "purple",
-          icon: Bell,
-        },
-      ]
-    : currentRole.stats;
-
-  const patientPrimaryItems = patientProfile
-    ? patientProfile.requestHistory.map((item) => ({
-        title: item.title,
-        meta: item.meta,
-        sub: item.sub,
-        status: item.status,
-      }))
-    : currentRole.primaryItems;
 
   const hospitalStats = hospitalProfile
     ? [
@@ -516,44 +393,6 @@ function App() {
         title: item.bloodType,
         meta: "Units available",
         sub: `${item.units} units`,
-        status: item.status,
-      }))
-    : currentRole.primaryItems;
-
-  const ngoStats = ngoProfile
-    ? [
-        {
-          label: "Campaigns",
-          value: String(ngoProfile.metrics?.campaigns ?? 0),
-          accent: "blue",
-          icon: Megaphone,
-        },
-        {
-          label: "Volunteers",
-          value: String(ngoProfile.metrics?.volunteers ?? 0),
-          accent: "gold",
-          icon: Users,
-        },
-        {
-          label: "Partner Hospitals",
-          value: String(ngoProfile.metrics?.partnerHospitals ?? 0),
-          accent: "green",
-          icon: Building2,
-        },
-        {
-          label: "Active Campaigns",
-          value: String(ngoProfile.metrics?.activeCampaigns ?? 0),
-          accent: "purple",
-          icon: HeartPulse,
-        },
-      ]
-    : currentRole.stats;
-
-  const ngoPrimaryItems = ngoProfile
-    ? (ngoProfile.campaigns || []).map((item) => ({
-        title: item.title,
-        meta: item.meta,
-        sub: item.sub,
         status: item.status,
       }))
     : currentRole.primaryItems;
@@ -600,34 +439,14 @@ function App() {
         })),
         bloodBadge: donorProfile.user?.bloodType || currentRole.bloodBadge,
       }
-    : role === "PATIENT" && patientProfile
-      ? {
-          ...currentRole,
-          stats: patientStats,
-          primaryItems: patientPrimaryItems,
-          secondaryItems: globalNotifications.slice(0, 3).map((notification) => ({
-            title: notification.title || "Notification",
-            meta: new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date(notification.createdAt)),
-            sub: notification.message,
-            action: "Open",
-          })),
-          bloodBadge: patientProfile.user?.bloodType || currentRole.bloodBadge,
-        }
-      : role === "HOSPITAL_STAFF" && hospitalProfile
+    : role === "HOSPITAL_STAFF" && hospitalProfile
         ? {
             ...currentRole,
             stats: hospitalStats,
             primaryItems: hospitalPrimaryItems,
             bloodBadge: hospitalProfile.user?.hospitalName || currentRole.bloodBadge,
           }
-        : role === "NGO" && ngoProfile
-          ? {
-              ...currentRole,
-              stats: ngoStats,
-              primaryItems: ngoPrimaryItems,
-              bloodBadge: ngoProfile.user?.ngoName || currentRole.bloodBadge,
-            }
-          : role === "ADMIN"
+        : role === "ADMIN"
             ? {
                 ...currentRole,
                 stats: adminStats,
@@ -639,20 +458,18 @@ function App() {
   const navigation = effectiveRole.nav;
   const hospitalPageLabel = isHospitalInventoryPage
     ? "Inventory"
-    : isHospitalStockInsightsPage
-      ? "Stock Insights"
     : isHospitalRequestsPage
       ? "Requests"
-      : isHospitalDonationNeedsPage
-        ? "Donation Needs"
       : isHospitalAppointmentsPage
         ? "Appointments"
         : isHospitalStaffPage ? "Staff" : null;
-  const activeNavigationLabel = donorPage?.label || patientPage?.label || (role === "PATIENT" && isNotificationPage ? "Notifications" : null) || hospitalPageLabel || (isAdminUsersPage
+  const activeNavigationLabel = donorPage?.label || hospitalPageLabel || (isAdminUsersPage
     ? "Users"
     : isAdminHospitalsPage
-      ? "Hospitals"
-      : isAdminInventoryPage ? "Inventory" : isNgoCampaignsPage ? "Campaigns" : isNgoOutreachPage ? "Outreach" : isNgoNotificationsPage ? "Notifications" : isNgoReportsPage ? "Reports" : "Dashboard");
+      ? "Institutions"
+    : isAdminInventoryPage ? "Inventory"
+      : isKnbtsQuestionnairePage ? "Questionnaire Queue"
+        : isNotificationPage ? "Notifications" : "Dashboard");
 
   function handleLogout() {
     logout();
@@ -675,10 +492,11 @@ function App() {
       const donorRoutes = {
         Dashboard: "/dashboard",
         "My Profile": "/donor/profile",
+        Questionnaire: "/donor/questionnaire",
+        "Questionnaire History": "/donor/questionnaire/history",
         "Donation History": "/donor/donations",
         Appointments: "/donor/appointments",
         "Emergency Alerts": "/donor/alerts",
-        Campaigns: "/donor/campaigns",
       };
 
       if (donorRoutes[label]) {
@@ -688,29 +506,22 @@ function App() {
       }
     }
 
-    if (role === "PATIENT" && label === "Request Assistance") {
+    if (role === "HOSPITAL_STAFF" && ["Inventory", "Requests"].includes(label)) {
       setMessage("");
-      navigate("/patient/requests");
-      return;
-    }
-
-    if (role === "PATIENT" && ["Appointments", "Medical Notes", "Notifications", "Open Notifications", "My Requests"].includes(label)) {
-      setMessage("");
-      const patientRoutes = {
-        Appointments: "/patient/appointments",
-        "Medical Notes": "/patient/medical-notes",
-        Notifications: "/notifications",
-        "Open Notifications": "/notifications",
-        "My Requests": "/patient/requests",
-      };
-      navigate(patientRoutes[label]);
-      return;
-    }
-
-    if (role === "HOSPITAL_STAFF" && ["Inventory", "Stock Insights", "Requests", "Donation Needs"].includes(label)) {
-      setMessage("");
-      const hospitalRoutes = { Inventory: "/hospital/inventory", "Stock Insights": "/hospital/stock-insights", Requests: "/hospital/requests", "Donation Needs": "/hospital/donation-needs" };
+      const hospitalRoutes = { Inventory: "/hospital/inventory", Requests: "/hospital/requests" };
       navigate(hospitalRoutes[label]);
+      return;
+    }
+
+    if (role === "KNBTS_STAFF" && label === "Questionnaire Queue") {
+      setMessage("");
+      navigate("/knbts/questionnaire");
+      return;
+    }
+
+    if (role === "KNBTS_STAFF" && label === "Notifications") {
+      setMessage("");
+      navigate("/notifications");
       return;
     }
 
@@ -720,25 +531,13 @@ function App() {
       return;
     }
 
-    if (role === "NGO" && ["Campaigns", "Outreach", "Notifications", "Reports"].includes(label)) {
-      setMessage("");
-      const ngoRoutes = {
-        Campaigns: "/ngo/campaigns",
-        Outreach: "/ngo/outreach",
-        Notifications: "/ngo/notifications",
-        Reports: "/ngo/reports",
-      };
-      navigate(ngoRoutes[label]);
-      return;
-    }
-
     if (role === "ADMIN" && label === "Users") {
       setMessage("");
       navigate("/admin/users");
       return;
     }
 
-    if (role === "ADMIN" && label === "Hospitals") {
+    if (role === "ADMIN" && label === "Institutions") {
       setMessage("");
       navigate("/admin/hospitals");
       return;
@@ -752,7 +551,7 @@ function App() {
 
     if (label === "Dashboard") {
       setMessage("");
-      navigate(role === "ADMIN" ? "/admin-dashboard" : "/dashboard");
+      navigate(getDashboardPath(role));
       return;
     }
 
@@ -770,63 +569,27 @@ function App() {
       : current);
   }
 
-  function refreshPatientProfile() {
-    patientAPI.getProfile()
-      .then((response) => setPatientProfile(response?.data || null))
-      .catch(() => setMessage("Unable to refresh your patient dashboard."));
-  }
-
-  function handlePatientNotificationRead(notificationId) {
-    setGlobalNotifications((current) => current.map((notification) =>
-      notification.notificationId === notificationId
-        ? { ...notification, status: "READ", readAt: new Date().toISOString() }
-        : notification
-    ));
-    setUnreadNotificationCount((current) => Math.max(0, current - 1));
-  }
-
   function refreshHospitalProfile() {
     hospitalAPI.getProfile()
       .then((response) => setHospitalProfile(response?.data || null))
       .catch(() => setMessage("Unable to refresh your hospital dashboard."));
   }
 
-  function refreshNgoProfile() {
-    ngoAPI.getProfile()
-      .then((response) => setNgoProfile(response?.data || null))
-      .catch(() => setMessage("Unable to refresh your NGO dashboard."));
-  }
-
   const donorPageContent = {
     "/donor/profile": <DonorProfilePage onProfileUpdated={handleDonorProfileUpdated} />,
+    "/donor/questionnaire": <DonorQuestionnairePage />,
+    "/donor/questionnaire/history": <DonorQuestionnairePage historyOnly />,
     "/donor/donations": <DonorDonationsPage />,
     "/donor/appointments": <DonorAppointmentsPage />,
     "/donor/alerts": <DonorAlertsPage />,
-    "/donor/campaigns": <DonorCampaignsPage />,
   }[location.pathname];
-  const patientPageContent = location.pathname === "/patient/requests"
-    ? <PatientRequestsPage onRequestCreated={refreshPatientProfile} onNotificationRead={handlePatientNotificationRead} />
-    : isPatientAppointmentsPage
-      ? <PatientAppointmentsPage />
-      : isPatientMedicalNotesPage ? <PatientMedicalNotesPage /> : null;
   const hospitalPageContent = isHospitalInventoryPage
     ? <HospitalInventoryPage onInventoryUpdated={refreshHospitalProfile} />
-    : isHospitalStockInsightsPage
-      ? <HospitalStockInsightsPage />
     : isHospitalRequestsPage
       ? <HospitalRequestsPage onRequestUpdated={refreshHospitalProfile} />
-      : isHospitalDonationNeedsPage
-        ? <HospitalDonationNeedsPage />
       : isHospitalAppointmentsPage
         ? <HospitalAppointmentsPage onAppointmentUpdated={refreshHospitalProfile} />
         : isHospitalStaffPage ? <HospitalStaffPage /> : null;
-    const ngoPageContent = isNgoCampaignsPage
-      ? <NgoCampaignsPage onCampaignChanged={refreshNgoProfile} />
-      : isNgoOutreachPage
-        ? <NgoOutreachPage />
-        : isNgoNotificationsPage
-          ? <NgoNotificationsPage onUnreadCountChange={setUnreadNotificationCount} />
-          : isNgoReportsPage ? <NgoReportsPage /> : null;
 
   const renderStatCard = ({ label, value, accent, icon: Icon }, index) => (
     <div className="stat-card" key={`${label}-${index}`}>
@@ -1004,40 +767,46 @@ function App() {
 
             <div>
               <div className="page-title">
-                {isNotificationPage ? "Notifications" : donorPage?.label || patientPage?.label || (isNgoCampaignsPage || isNgoOutreachPage || isNgoNotificationsPage || isNgoReportsPage
-                  ? isNgoCampaignsPage ? "Campaign Management" : isNgoOutreachPage ? "Community Outreach" : isNgoNotificationsPage ? "Notifications" : "Reports"
-                  : isHospitalInventoryPage
-                  ? "Blood Inventory"
-                  : isHospitalRequestsPage
-                    ? "Hospital Request Coordination"
-                    : isHospitalDonationNeedsPage
-                      ? "Donation Needs"
-                    : isHospitalAppointmentsPage
-                      ? "Appointments"
-                      : isHospitalStaffPage ? "Hospital Staff" : isAdminUsersPage
-                  ? "User Accounts"
-                  : isAdminHospitalsPage
-                    ? "Hospital Directory"
-                    : isAdminInventoryPage ? "Blood Inventory" : effectiveRole.title)}
+                {isNotificationPage
+                  ? "Notifications"
+                  : donorPage?.label || (isHospitalInventoryPage
+                    ? "Blood Inventory"
+                    : isHospitalRequestsPage
+                      ? "Hospital Request Coordination"
+                      : isHospitalAppointmentsPage
+                        ? "Appointments"
+                        : isHospitalStaffPage
+                          ? "Hospital Staff"
+                          : isAdminUsersPage
+                            ? "User Accounts"
+                            : isAdminHospitalsPage
+                              ? "Institution Directory"
+                              : isAdminInventoryPage
+                                ? "Blood Inventory"
+                                : isKnbtsQuestionnairePage
+                                  ? "KNBTS Questionnaire Review"
+                                  : effectiveRole.title)}
               </div>
               <div className="page-subtitle">
-                {isNotificationPage ? "Updates and reminders for your HemoConnect account." : donorPage?.subtitle || patientPage?.subtitle || (isNgoCampaignsPage || isNgoOutreachPage || isNgoNotificationsPage || isNgoReportsPage
-                  ? isNgoCampaignsPage ? "Create and coordinate campaigns for your organization." : isNgoOutreachPage ? "Plan and track community engagement activities." : isNgoNotificationsPage ? "Updates about your organization’s campaigns." : "Measure campaign and outreach activity."
-                  : isHospitalInventoryPage
-                  ? "Review and adjust blood stock at your hospital."
-                  : isHospitalStockInsightsPage
-                    ? "Review recorded usage, replenishment estimates, and threshold decisions."
-                  : isHospitalRequestsPage
-                    ? "Create official requests, review assistance enquiries, and record fulfillment."
-                    : isHospitalDonationNeedsPage
-                      ? "Coordinate partner NGO campaigns around hospital blood needs."
-                    : isHospitalAppointmentsPage
-                      ? "Review and update appointments at your hospital."
-                      : isHospitalStaffPage ? "Contact your hospital team." : isAdminUsersPage
-                  ? "Manage platform account access."
-                  : isAdminHospitalsPage
-                    ? "Review hospital access and contact details."
-                    : isAdminInventoryPage ? "Monitor stock levels across the hospital network." : effectiveRole.subtitle)}
+                {isNotificationPage
+                  ? "Updates and reminders for your HemoConnect account."
+                  : donorPage?.subtitle || (isHospitalInventoryPage
+                    ? "Review and adjust blood stock at your hospital."
+                    : isHospitalRequestsPage
+                      ? "Create official requests and record fulfillment."
+                      : isHospitalAppointmentsPage
+                        ? "Review and update appointments at your hospital."
+                        : isHospitalStaffPage
+                          ? "Contact your hospital team."
+                          : isAdminUsersPage
+                            ? "Manage platform account access."
+                            : isAdminHospitalsPage
+                              ? "Review hospitals and KNBTS centre access."
+                              : isAdminInventoryPage
+                                ? "Monitor stock levels across the hospital network."
+                                : isKnbtsQuestionnairePage
+                                  ? "Inspect submissions, assessments and approvals."
+                                  : effectiveRole.subtitle)}
               </div>
             </div>
           </div>
@@ -1127,18 +896,26 @@ function App() {
             </div>
           )}
 
-          {role === "DONOR" && !donorPage && donorDashboardLoading ? (
+          {role === "KNBTS_STAFF" && isKnbtsQuestionnairePage ? (
+            location.pathname.startsWith("/knbts/questionnaire/")
+              ? <KnbtsQuestionnaireReviewPage />
+              : <KnbtsQuestionnaireQueuePage />
+          ) : role === "KNBTS_STAFF" && isNotificationPage ? (
+            <NotificationsPage onUnreadCountChange={setUnreadNotificationCount} />
+          ) : role === "KNBTS_STAFF" ? (
+            knbtsProfileLoading ? (
+              <div className="donor-page-state" role="status">Loading centre profile...</div>
+            ) : (
+              <KnbtsDashboardPage profile={knbtsProfile} />
+            )
+          ) : role === "DONOR" && !donorPage && donorDashboardLoading ? (
             <div className="donor-page-state" role="status">Loading your dashboard...</div>
           ) : role === "DONOR" && donorPage ? (
             donorPageContent
           ) : isNotificationPage ? (
             <NotificationsPage onUnreadCountChange={setUnreadNotificationCount} />
-          ) : role === "PATIENT" && patientPage ? (
-            patientPageContent
           ) : hospitalPageLabel ? (
             hospitalPageContent
-          ) : isNgoCampaignsPage || isNgoOutreachPage || isNgoNotificationsPage || isNgoReportsPage ? (
-            ngoPageContent
           ) : isAdminUsersPage ? (
             <AdminUsers />
           ) : isAdminHospitalsPage ? (
