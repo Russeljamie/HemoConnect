@@ -5,6 +5,12 @@ const env = require("../config/env");
 const MAX_ATTEMPTS = 5;
 const BATCH_SIZE = 20;
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
+const APPROVED_SMS_EVENT_KEY_FILTERS = [
+  { eventKey: { startsWith: "account-", endsWith: "-registered:sms" } },
+  { eventKey: { startsWith: "questionnaire-", endsWith: "-approved:sms" } },
+  { eventKey: { startsWith: "appointment-", endsWith: "-accepted:sms" } },
+  { eventKey: { startsWith: "donation-", endsWith: "-completed:sms" } },
+];
 
 class SmsProviderError extends Error {
   constructor(message, { retryable = true, responseCode = null } = {}) {
@@ -86,6 +92,14 @@ const isSmsConfigured = () =>
   env.SMS_PROVIDER === "mobilesasa" &&
   Boolean(env.MOBILESASA_API_TOKEN && env.MOBILESASA_SENDER_ID);
 
+const isApprovedSmsEventKey = (eventKey) =>
+  typeof eventKey === "string" && [
+    /^account-\d+-registered:sms$/,
+    /^questionnaire-\d+-approved:sms$/,
+    /^appointment-\d+-accepted:sms$/,
+    /^donation-\d+-completed:sms$/,
+  ].some((pattern) => pattern.test(eventKey));
+
 const enqueueSmsOnce = async (tx, recipientPhone, message, eventKey) => {
   if (!eventKey || typeof eventKey !== "string") throw new Error("SMS event key is required.");
   if (typeof message !== "string" || !message.trim()) throw new Error("SMS message is required.");
@@ -124,6 +138,7 @@ const processSmsOutbox = async (now = new Date(), provider = null, options = {})
     where: {
       status: "PROCESSING",
       processingAt: { lt: new Date(now.getTime() - PROCESSING_TIMEOUT_MS) },
+      NOT: { eventKey: { startsWith: "mobilesasa-live-test:" } },
     },
     data: {
       status: "FAILED",
@@ -138,6 +153,7 @@ const processSmsOutbox = async (now = new Date(), provider = null, options = {})
       status: "QUEUED",
       nextAttemptAt: { lte: now },
       attempts: { lt: MAX_ATTEMPTS },
+      OR: APPROVED_SMS_EVENT_KEY_FILTERS,
       ...(options.eventKey ? { eventKey: options.eventKey } : {}),
     },
     orderBy: [{ createdAt: "asc" }, { smsId: "asc" }],
@@ -146,6 +162,7 @@ const processSmsOutbox = async (now = new Date(), provider = null, options = {})
 
   let accepted = 0;
   for (const sms of messages) {
+    if (!isApprovedSmsEventKey(sms.eventKey)) continue;
     const claimed = await prisma.smsOutbox.updateMany({
       where: { smsId: sms.smsId, status: "QUEUED" },
       data: { status: "PROCESSING", processingAt: now },
@@ -294,6 +311,7 @@ module.exports = {
   normalizeKenyanPhoneNumber,
   createMobileSasaProvider,
   isSmsConfigured,
+  isApprovedSmsEventKey,
   enqueueSmsOnce,
   enqueueSms,
   processSmsOutbox,

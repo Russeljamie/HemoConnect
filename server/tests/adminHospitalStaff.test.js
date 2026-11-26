@@ -4,11 +4,13 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("Admin hospital staff account management", () => {
   let adminUser;
   let adminToken;
   let hospital;
+  const artifactTracker = createTestArtifactTracker(prisma);
 
   beforeAll(async () => {
     [adminUser, hospital] = await Promise.all([
@@ -25,8 +27,17 @@ describe("Admin hospital staff account management", () => {
     );
   });
 
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+  });
+
+  afterEach(async () => {
+    await artifactTracker.cleanup();
+  });
+
   it("creates a hospital-scoped staff account and requires a password change before access", async () => {
     const email = `admin-staff-${Date.now()}@hemoconnect.test`;
+    artifactTracker.trackEmail({ recipientEmail: email });
     const temporaryPassword = "TempPassword-2026!";
     let userId;
     let staffId;
@@ -51,6 +62,12 @@ describe("Admin hospital staff account management", () => {
       expect(createResponse.body.data.staff.user.password).toBeUndefined();
       userId = createResponse.body.data.staff.user.userId;
       staffId = createResponse.body.data.staff.staffId;
+      artifactTracker.trackSms({
+        eventKey: `account-${userId}-registered:sms`,
+      });
+      expect(await prisma.smsOutbox.count({
+        where: { eventKey: `account-${userId}-registered:sms` },
+      })).toBe(0);
 
       const storedUser = await prisma.user.findUnique({
         where: { userId },
@@ -84,16 +101,25 @@ describe("Admin hospital staff account management", () => {
         .set("Authorization", `Bearer ${passwordResponse.body.data.token}`);
       expect(profileResponse.status).toBe(200);
     } finally {
-      if (staffId) {
-        await prisma.auditLog.deleteMany({
-          where: { entityType: "HospitalStaff", entityId: String(staffId) },
+      if (!userId || !staffId) {
+        const existingUser = await prisma.user.findUnique({
+          where: { email },
+          select: { userId: true, hospitalStaff: { select: { staffId: true } } },
         });
+        userId = userId || existingUser?.userId;
+        staffId = staffId || existingUser?.hospitalStaff?.staffId;
+      }
+      artifactTracker.trackAudit({
+        OR: [
+          { entityType: "HospitalStaff", entityId: staffId ? String(staffId) : "__unassigned__" },
+          { entityType: "User", entityId: userId ? String(userId) : "__unassigned__" },
+        ],
+      });
+      await artifactTracker.capture();
+      if (staffId) {
         await prisma.hospitalStaff.delete({ where: { staffId } });
       }
       if (userId) {
-        await prisma.auditLog.deleteMany({
-          where: { entityType: "User", entityId: String(userId) },
-        });
         await prisma.user.delete({ where: { userId } });
       }
     }

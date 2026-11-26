@@ -1,6 +1,8 @@
 const prisma = require("./prisma");
 const env = require("../config/env");
 const { notifyUser } = require("./notificationDelivery");
+const { getEligibleEmergencyDonorIds } = require("./emergencyDonorEligibility");
+const { getCompatibleDonorBloodTypes } = require("../utils/bloodCompatibility");
 
 const OPEN_REQUEST_STATUSES = ["OPEN", "PENDING", "URGENT"];
 const EARTH_RADIUS_KM = 6371;
@@ -19,7 +21,7 @@ const calculateDistanceKm = (from, to) => {
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 };
 
-const sendDonorAlert = async (request, donor, wave, distanceKm) =>
+const sendDonorAlert = async (request, donor, wave, distanceKm, now) =>
   prisma.$transaction(async (tx) => {
     const match = await tx.requestMatch.create({
       data: {
@@ -28,7 +30,7 @@ const sendDonorAlert = async (request, donor, wave, distanceKm) =>
         wave,
         distanceKm,
         status: "NOTIFIED",
-        notifiedAt: new Date(),
+        notifiedAt: now,
       },
     });
 
@@ -52,7 +54,6 @@ const sendDonorAlert = async (request, donor, wave, distanceKm) =>
         neededBy: request.neededBy,
         hospital: request.hospital?.name || null,
       },
-      smsMessage: `Emergency HemoConnect request: ${request.bloodType} blood is needed (${request.urgencyLevel.toLowerCase()}) about ${distanceKm.toFixed(1)} km away at ${hospitalName}. Sign in to respond.`,
     });
     await tx.auditLog.create({
       data: {
@@ -66,12 +67,12 @@ const sendDonorAlert = async (request, donor, wave, distanceKm) =>
     return match;
   });
 
-const dispatchWave = async (request, wave) => {
+const dispatchWave = async (request, wave, now) => {
   const radiusKm = env.ALERT_WAVE_RADII_KM[wave - 1];
   const previousRadiusKm = wave > 1 ? env.ALERT_WAVE_RADII_KM[wave - 2] : 0;
   const donors = await prisma.donor.findMany({
         where: {
-          bloodType: request.bloodType,
+          bloodType: { in: getCompatibleDonorBloodTypes(request.bloodType) },
           isEligible: true,
           latitude: { not: null },
           longitude: { not: null },
@@ -104,10 +105,16 @@ const dispatchWave = async (request, wave) => {
     .sort((left, right) =>
       left.distanceKm - right.distanceKm || left.donorId - right.donorId
     );
+  const eligibleDonorIds = await getEligibleEmergencyDonorIds(
+    prisma,
+    rankedDonors.map(({ donorId }) => donorId),
+    now
+  );
+  const eligibleDonors = rankedDonors.filter(({ donorId }) => eligibleDonorIds.has(donorId));
 
-  for (const donor of rankedDonors) {
+  for (const donor of eligibleDonors) {
     try {
-      await sendDonorAlert(request, donor, wave, donor.distanceKm);
+      await sendDonorAlert(request, donor, wave, donor.distanceKm, now);
     } catch (error) {
       if (error.code !== "P2002") throw error;
     }
@@ -115,10 +122,10 @@ const dispatchWave = async (request, wave) => {
 
   await prisma.emergencyRequest.update({
     where: { requestId: request.requestId },
-    data: { currentWave: wave, lastAlertAt: new Date() },
+    data: { currentWave: wave, lastAlertAt: now },
   });
 
-  return rankedDonors.length;
+  return eligibleDonors.length;
 };
 
 const processEmergencyRequest = async (requestId, now = new Date()) => {
@@ -156,7 +163,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
   }
 
   if (request.currentWave === 0) {
-    return dispatchWave(request, 1);
+    return dispatchWave(request, 1, now);
   }
 
   const intervalMs = env.ALERT_WAVE_INTERVAL_MINUTES * 60 * 1000;
@@ -166,7 +173,7 @@ const processEmergencyRequest = async (requestId, now = new Date()) => {
 
   const nextWave = request.currentWave + 1;
   if (nextWave > env.ALERT_WAVE_RADII_KM.length) return 0;
-  return dispatchWave(request, nextWave);
+  return dispatchWave(request, nextWave, now);
 };
 
 let workerTimer;

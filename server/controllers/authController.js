@@ -92,6 +92,7 @@ const register = async (req, res, next) => {
           name: `${newUser.firstName} ${newUser.lastName}`,
           role: "donor",
         },
+        smsMessage: "Welcome to HemoConnect! Your account has been successfully created. Thank you for joining our blood donation community. Log in to access your account and get started.",
       });
       return newUser;
     });

@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node scripts/run-tests.js",
     "test:db:setup": "node scripts/setup-test-database.js",
+    "sms:live-test": "node scripts/mobilesasa-live-test.js",
     "postinstall": "prisma skills sync || exit 0",
     "db:seed": "node prisma/seed.js",
     "dev": "nodemon server/server.js"

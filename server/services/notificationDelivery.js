@@ -1,6 +1,13 @@
 const { enqueueEmail } = require("./email");
 const { enqueueSms } = require("./sms");
 
+const SMS_ENABLED_EVENTS = new Set([
+  "ACCOUNT_REGISTERED",
+  "QUESTIONNAIRE_APPROVED",
+  "APPOINTMENT_ACCEPTED",
+  "DONATION_COMPLETED",
+]);
+
 const formatAppointmentDate = (date) => new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "long",
@@ -9,6 +16,16 @@ const formatAppointmentDate = (date) => new Intl.DateTimeFormat("en-GB", {
 }).format(new Date(date));
 
 const appointmentReference = (appointmentId) => `HC-${appointmentId}`;
+
+const appointmentAcceptanceMessage = ({ hospital, date, time }) =>
+  `Your donation appointment has been accepted by ${hospital || "the selected hospital"}. Please avail yourself at the selected hospital on ${formatAppointmentDate(date)} at ${time}. Thank you for choosing HemoConnect.`;
+
+const enqueueApprovedSms = async (tx, { eventType, recipientPhone, message, eventKey }) => {
+  if (!SMS_ENABLED_EVENTS.has(eventType)) {
+    throw new Error(`SMS is not enabled for notification event: ${eventType}.`);
+  }
+  return enqueueSms(tx, recipientPhone, message, `${eventKey}:sms`);
+};
 
 const appointmentNotificationDetails = (appointment) => {
   const donor = appointment.donor;
@@ -73,7 +90,14 @@ const notifyUser = async (tx, {
   if (!notification) return null;
 
   if (emailTemplate) await enqueueEmail(tx, email, emailTemplate, emailPayload || {});
-  if (smsMessage) await enqueueSms(tx, phone, smsMessage, `${eventKey}:sms`);
+  if (smsMessage) {
+    await enqueueApprovedSms(tx, {
+      eventType: type,
+      recipientPhone: phone,
+      message: smsMessage,
+      eventKey,
+    });
+  }
   return notification;
 };
 
@@ -93,7 +117,6 @@ const notifyAppointment = async (tx, appointment, event) => {
       message: details.bookingMessage,
       emailTemplate: "APPOINTMENT_BOOKED",
       emailPayload: details.emailPayload,
-      smsMessage: details.bookingMessage,
     });
   }
   if (event === "CANCELLED") {
@@ -107,7 +130,6 @@ const notifyAppointment = async (tx, appointment, event) => {
       message: details.cancellationMessage,
       emailTemplate: "APPOINTMENT_CANCELLED",
       emailPayload: details.emailPayload,
-      smsMessage: details.cancellationMessage,
     });
   }
   if (event === "REMINDER") {
@@ -119,7 +141,6 @@ const notifyAppointment = async (tx, appointment, event) => {
       type: "APPOINTMENT_REMINDER",
       title: "Appointment reminder",
       message: details.reminderMessage,
-      smsMessage: details.reminderMessage,
     });
   }
   throw new Error(`Unknown appointment notification event: ${event}`);
@@ -177,7 +198,6 @@ const queueHospitalInventoryAlert = async (tx, { inventory, eventKey, actorUserI
         units: inventory.unitsAvailable,
         minimumUnits: inventory.minimumUnits,
       },
-      smsMessage: `HemoConnect low inventory: ${hospital?.name || "Your hospital"} has ${inventory.unitsAvailable} ${inventory.bloodType} units (minimum ${inventory.minimumUnits}). Please review stock.`,
     });
   }
   return staff.length;
@@ -186,8 +206,10 @@ const queueHospitalInventoryAlert = async (tx, { inventory, eventKey, actorUserI
 module.exports = {
   formatAppointmentDate,
   appointmentReference,
+  appointmentAcceptanceMessage,
   appointmentNotificationDetails,
   createInAppNotification,
+  enqueueApprovedSms,
   notifyUser,
   notifyAppointment,
   queueHospitalInventoryAlert,

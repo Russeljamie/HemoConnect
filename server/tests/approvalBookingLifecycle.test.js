@@ -4,11 +4,19 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { normalizeKenyanPhoneNumber } = require("../services/sms");
+const { calculateDistanceKm } = require("../services/donorMatching");
+const { formatAppointmentDate } = require("../services/notificationDelivery");
+const { getDonationEligibility } = require("../utils/donationEligibility");
+const { createQuestionnaireFixtureCleanup } = require("./helpers/questionnaireFixtureCleanup");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("Task 6 approval-gated booking lifecycle", () => {
   let knbtsStaff;
   let hospital;
   const cleanups = [];
+  const questionnaireFixtureCleanup = createQuestionnaireFixtureCleanup(prisma);
+  const artifactTracker = createTestArtifactTracker(prisma);
 
   const tokenFor = (user) => jwt.sign(
     { userId: user.userId, role: user.role },
@@ -18,9 +26,24 @@ describe("Task 6 approval-gated booking lifecycle", () => {
 
   beforeAll(async () => {
     knbtsStaff = await prisma.knbtsStaff.findFirst({ include: { centre: true } });
-    hospital = await prisma.hospital.findFirst({
+    const activeHospitals = await prisma.hospital.findMany({
       where: { institutionType: "HOSPITAL", isActive: true, latitude: { not: null }, longitude: { not: null } },
     });
+    hospital = activeHospitals
+      .map((candidate) => ({
+        candidate,
+        distanceKm: calculateDistanceKm(
+          { latitude: -1.286389, longitude: 36.817223 },
+          { latitude: candidate.latitude, longitude: candidate.longitude }
+        ),
+      }))
+      .sort((left, right) =>
+        left.distanceKm - right.distanceKm ||
+        left.candidate.hospitalId - right.candidate.hospitalId
+      )[0]?.candidate;
+    if (!knbtsStaff || !hospital) {
+      throw new Error("Approval booking fixtures require active KNBTS staff and a mapped hospital.");
+    }
   });
 
   const createDonor = async (label = "booking") => {
@@ -33,6 +56,15 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         password: "test-only-password",
         role: "DONOR",
         status: "ACTIVE",
+      },
+    });
+    const cleanupRecord = { userId: user.userId, donorId: null };
+    cleanups.push(cleanupRecord);
+    artifactTracker.trackNotification({ userId: user.userId });
+    artifactTracker.trackEmail({ recipientEmail: user.email });
+    artifactTracker.trackSms({
+      recipientPhone: {
+        in: [user.phone, normalizeKenyanPhoneNumber(user.phone)].filter(Boolean),
       },
     });
     const donor = await prisma.donor.create({
@@ -48,7 +80,13 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         userId: user.userId,
       },
     });
-    cleanups.push({ userId: user.userId, donorId: donor.donorId });
+    cleanupRecord.donorId = donor.donorId;
+    artifactTracker.trackAudit({
+      OR: [
+        { entityType: "User", entityId: String(user.userId) },
+        { entityType: "Donor", entityId: String(donor.donorId) },
+      ],
+    });
     return { user, donor, token: tokenFor(user) };
   };
 
@@ -67,6 +105,7 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         publishedAt: now,
       },
     });
+    questionnaireFixtureCleanup.trackVersion(version);
     const submission = await prisma.donorQuestionnaireSubmission.create({
       data: {
         donorId: donor.donorId,
@@ -76,6 +115,7 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         declarationAcknowledgedAt: now,
       },
     });
+    questionnaireFixtureCleanup.trackSubmission(submission);
     const review = await prisma.questionnaireReview.create({
       data: {
         submissionId: submission.submissionId,
@@ -106,13 +146,13 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         status: overrides.status || "ACTIVE",
       },
     });
-    const record = { version, submission, review, approval };
-    cleanups.push({
-      donorId: donor.donorId,
-      submissionId: submission.submissionId,
-      approvalId: approval.approvalId,
-      versionId: version.questionnaireVersionId,
+    artifactTracker.trackAudit({
+      OR: [
+        { entityType: "DonorQuestionnaireSubmission", entityId: String(submission.submissionId) },
+        { entityType: "QuestionnaireApproval", entityId: String(approval.approvalId) },
+      ],
     });
+    const record = { version, submission, review, approval };
     return record;
   };
 
@@ -123,6 +163,9 @@ describe("Task 6 approval-gated booking lifecycle", () => {
     let slot = await prisma.appointmentSlot.findFirst({
       where: { hospitalId: hospital.hospitalId, slotDate: normalized, time: "13:30" },
     });
+    const original = slot
+      ? { capacity: slot.capacity, bookedCount: slot.bookedCount, status: slot.status }
+      : null;
     if (!slot) {
       slot = await prisma.appointmentSlot.create({
         data: {
@@ -140,85 +183,114 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         data: { capacity, bookedCount, status: "OPEN" },
       });
     }
-    cleanups.push({ slotId: slot.slotId });
+    cleanups.push({ slotId: slot.slotId, createdByTest: !original, original });
     return slot;
   };
 
-  const book = (fixture, slot, purpose = "Blood Donation") => request(app)
-    .post("/api/donor/appointments")
-    .set("Authorization", `Bearer ${fixture.token}`)
-    .send({
-      slotId: slot.slotId,
-      purpose,
-      hospitalId: hospital.hospitalId,
-      locationLatitude: -1.286389,
-      locationLongitude: 36.817223,
-    });
+  const book = async (fixture, slot, purpose = "Blood Donation") => {
+    const response = await request(app)
+      .post("/api/donor/appointments")
+      .set("Authorization", `Bearer ${fixture.token}`)
+      .send({
+        slotId: slot.slotId,
+        purpose,
+        hospitalId: hospital.hospitalId,
+        locationLatitude: -1.286389,
+        locationLongitude: 36.817223,
+      });
+    const appointmentId = response.body?.data?.appointment?.appointmentId;
+    if (response.status === 201 && appointmentId) {
+      artifactTracker.trackAudit({
+        entityType: "Appointment",
+        entityId: String(appointmentId),
+      });
+    }
+    return response;
+  };
 
-  afterEach(async () => {
-    const fixtureVersionIds = cleanups
-      .filter((record) => record.versionId)
-      .map((record) => record.versionId);
-    for (const record of [...cleanups].reverse()) {
-      if (record.slotId) {
-        await prisma.appointmentSlot.updateMany({
-          where: { slotId: record.slotId },
-          data: { bookedCount: 0 },
+  const createQuestionnaireDraft = async (fixture) => {
+    const response = await request(app)
+      .post("/api/donor/questionnaire/submissions")
+      .set("Authorization", `Bearer ${fixture.token}`);
+    const submission = response.body?.data?.submission;
+    if (response.status === 201 && submission?.submissionId) {
+      questionnaireFixtureCleanup.trackSubmission(submission);
+    }
+    return response;
+  };
+
+  const cleanupFixtures = async () => {
+    const donorIds = cleanups
+      .filter((record) => record.donorId)
+      .map((record) => record.donorId);
+    if (donorIds.length) {
+      const [appointments, donations] = await Promise.all([
+        prisma.appointment.findMany({
+          where: { donorId: { in: donorIds } },
+          select: { appointmentId: true },
+        }),
+        prisma.donationRecord.findMany({
+          where: { donorId: { in: donorIds } },
+          select: { donationId: true },
+        }),
+      ]);
+      for (const { appointmentId } of appointments) {
+        artifactTracker.trackAudit({
+          entityType: "Appointment",
+          entityId: String(appointmentId),
         });
       }
-      if (record.approvalId) {
-        await prisma.questionnaireBookingAssociation.deleteMany({ where: { approvalId: record.approvalId } });
-        await prisma.questionnaireApproval.deleteMany({ where: { approvalId: record.approvalId } });
-      }
-      if (record.submissionId) {
-        await prisma.questionnaireClinicalAssessment.deleteMany({ where: { submissionId: record.submissionId } });
-        await prisma.questionnaireReview.deleteMany({ where: { submissionId: record.submissionId } });
-        await prisma.donorQuestionnaireSubmission.deleteMany({ where: { submissionId: record.submissionId } });
-      }
-      if (record.versionId) {
-        // Keep until all submissions for this fixture have been removed.
-      }
-      if (record.donorId) {
-        const owner = record.userId
-          ? await prisma.user.findUnique({
-            where: { userId: record.userId },
-            select: { email: true, phone: true },
-          })
-          : null;
-        if (owner) {
-          await prisma.notification.deleteMany({ where: { userId: record.userId } });
-          await prisma.emailOutbox.deleteMany({ where: { recipientEmail: owner.email } });
-          await prisma.smsOutbox.deleteMany({ where: { recipientPhone: owner.phone } });
-        }
-        await prisma.donationRecord.deleteMany({ where: { donorId: record.donorId } });
-        await prisma.questionnaireBookingAssociation.deleteMany({
-          where: { approval: { donorId: record.donorId } },
+      for (const { donationId } of donations) {
+        artifactTracker.trackAudit({
+          entityType: "DonationRecord",
+          entityId: String(donationId),
         });
-        await prisma.appointment.deleteMany({ where: { donorId: record.donorId } });
-        await prisma.questionnaireApproval.deleteMany({ where: { donorId: record.donorId } });
-        await prisma.questionnaireClinicalAssessment.deleteMany({ where: { donorId: record.donorId } });
-        const remainingSubmissionIds = await prisma.donorQuestionnaireSubmission.findMany({
-          where: { donorId: record.donorId },
-          select: { submissionId: true },
-        });
-        await prisma.questionnaireReview.deleteMany({
-          where: { submissionId: { in: remainingSubmissionIds.map((row) => row.submissionId) } },
-        });
-        await prisma.donorQuestionnaireSubmission.deleteMany({ where: { donorId: record.donorId } });
-        await prisma.donor.deleteMany({ where: { donorId: record.donorId } });
-      }
-      if (record.userId) {
-        await prisma.user.deleteMany({ where: { userId: record.userId } });
       }
     }
-    await prisma.questionnaireVersion.deleteMany({
-      where: { questionnaireVersionId: { in: fixtureVersionIds } },
-    });
+    await artifactTracker.capture();
+    try {
+      await questionnaireFixtureCleanup.cleanup({ deleteVersions: true });
+
+      for (const record of [...cleanups].reverse()) {
+        if (record.donorId) {
+          await prisma.donationRecord.deleteMany({ where: { donorId: record.donorId } });
+          await prisma.appointment.deleteMany({ where: { donorId: record.donorId } });
+          await prisma.donor.deleteMany({ where: { donorId: record.donorId } });
+        }
+        if (record.userId) {
+          await prisma.user.deleteMany({ where: { userId: record.userId } });
+        }
+      }
+
+      for (const record of [...cleanups].reverse()) {
+        if (!record.slotId) continue;
+        if (record.createdByTest) {
+          await prisma.appointmentSlot.deleteMany({ where: { slotId: record.slotId } });
+        } else if (record.original) {
+          await prisma.appointmentSlot.updateMany({
+            where: { slotId: record.slotId },
+            data: record.original,
+          });
+        }
+      }
+    } finally {
+      await artifactTracker.cleanup();
+    }
     cleanups.length = 0;
+  };
+
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
   });
 
+  afterEach(cleanupFixtures);
+
   afterAll(async () => {
-    await prisma.$disconnect();
+    try {
+      await cleanupFixtures();
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   const scenarios = [
@@ -379,6 +451,12 @@ describe("Task 6 approval-gated booking lifecycle", () => {
       expect(cancellation.message).toContain("cancelled");
       expect(await prisma.smsOutbox.count({
         where: { eventKey: `appointment-${booked.body.data.appointment.appointmentId}-cancelled:sms` },
+      })).toBe(0);
+      expect(await prisma.emailOutbox.count({
+        where: {
+          recipientEmail: fixture.user.email,
+          template: "APPOINTMENT_CANCELLED",
+        },
       })).toBe(1);
       if (scenario === "repeated cancellation releases once") {
         expect((await request(app).patch(`/api/donor/appointments/${booked.body.data.appointment.appointmentId}/cancel`).set("Authorization", `Bearer ${fixture.token}`)).status).toBe(409);
@@ -452,6 +530,12 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         .set("Authorization", `Bearer ${staffToken}`).send({ quantity: 450 });
       expect(response.status).toBe(409);
       expect((await prisma.questionnaireApproval.findUnique({ where: { approvalId: approvalFixture.approval.approvalId } })).status).toBe("ACTIVE");
+      expect(await prisma.smsOutbox.count({
+        where: {
+          recipientPhone: normalizeKenyanPhoneNumber(fixture.user.phone),
+          eventKey: { startsWith: "donation-" },
+        },
+      })).toBe(0);
       return;
     }
     if (scenario === "cancelled appointment does not consume") {
@@ -474,13 +558,13 @@ describe("Task 6 approval-gated booking lifecycle", () => {
     }
     if (scenario === "active appointment blocks questionnaire draft") {
       await book(fixture, slot);
-      expect((await request(app).post("/api/donor/questionnaire/submissions").set("Authorization", `Bearer ${fixture.token}`)).status).toBe(409);
+      expect((await createQuestionnaireDraft(fixture)).status).toBe(409);
       return;
     }
     if (scenario === "released appointment allows questionnaire draft") {
       const booked = await book(fixture, slot);
       await request(app).patch(`/api/donor/appointments/${booked.body.data.appointment.appointmentId}/cancel`).set("Authorization", `Bearer ${fixture.token}`);
-      expect((await request(app).post("/api/donor/questionnaire/submissions").set("Authorization", `Bearer ${fixture.token}`)).status).toBe(201);
+      expect((await createQuestionnaireDraft(fixture)).status).toBe(201);
       return;
     }
     if (scenario === "expired historical association allows questionnaire") {
@@ -490,7 +574,7 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         data: { expiresAt: new Date(Date.now() - 1000) },
       });
       await request(app).patch(`/api/donor/appointments/${booked.body.data.appointment.appointmentId}/cancel`).set("Authorization", `Bearer ${fixture.token}`);
-      expect((await request(app).post("/api/donor/questionnaire/submissions").set("Authorization", `Bearer ${fixture.token}`)).status).toBe(201);
+      expect((await createQuestionnaireDraft(fixture)).status).toBe(201);
       return;
     }
     if (scenario === "consumed historical association allows questionnaire") {
@@ -501,7 +585,7 @@ describe("Task 6 approval-gated booking lifecycle", () => {
       const completion = await request(app).post(`/api/hospital/appointments/${booked.body.data.appointment.appointmentId}/donation`)
         .set("Authorization", `Bearer ${staffToken}`).send({ quantity: 450 });
       expect(completion.status).toBe(201);
-      expect((await request(app).post("/api/donor/questionnaire/submissions").set("Authorization", `Bearer ${fixture.token}`)).status).toBe(201);
+      expect((await createQuestionnaireDraft(fixture)).status).toBe(201);
       return;
     }
     if (scenario === "consumed approval rejected" ||
@@ -534,10 +618,224 @@ describe("Task 6 approval-gated booking lifecycle", () => {
         time: appointment.time,
         reference: `HC-${appointment.appointmentId}`,
       }));
-      expect(sms).toEqual(expect.objectContaining({
-        recipientPhone: `+254${fixture.user.phone.slice(1)}`,
-        status: "QUEUED",
-      }));
+      expect(sms).toBeNull();
+      expect(await prisma.smsOutbox.count({
+        where: { recipientPhone: `+254${fixture.user.phone.slice(1)}` },
+      })).toBe(0);
+      expect(await prisma.smsOutbox.count({
+        where: { eventKey: `appointment-${appointment.appointmentId}-booked:sms` },
+      })).toBe(0);
     }
+  });
+
+  it("queues one appointment SMS only after hospital staff accepts a donation booking", async () => {
+    const fixture = await createDonor("hospital-accepted");
+    await createApproval(fixture.donor);
+    const slot = await createSlot();
+    const booking = await book(fixture, slot);
+    expect(booking.status).toBe(201);
+    const appointment = booking.body.data.appointment;
+
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `appointment-${appointment.appointmentId}-accepted:sms` },
+    })).toBe(0);
+    expect(await prisma.notification.count({
+      where: { userId: fixture.user.userId, type: "APPOINTMENT_BOOKED" },
+    })).toBe(1);
+    expect(await prisma.emailOutbox.count({
+      where: { recipientEmail: fixture.user.email, template: "APPOINTMENT_BOOKED" },
+    })).toBe(1);
+
+    const hospitalStaff = await prisma.hospitalStaff.findFirst({
+      where: { hospitalId: hospital.hospitalId },
+    });
+    const hospitalToken = tokenFor({
+      userId: hospitalStaff.userId,
+      role: "HOSPITAL_STAFF",
+    });
+    const accepted = await request(app)
+      .patch(`/api/hospital/appointments/${appointment.appointmentId}/status`)
+      .set("Authorization", `Bearer ${hospitalToken}`)
+      .send({ status: "CONFIRMED" });
+    expect(accepted.status).toBe(200);
+    const acceptedSms = await prisma.smsOutbox.findUnique({
+      where: { eventKey: `appointment-${appointment.appointmentId}-accepted:sms` },
+    });
+    expect(acceptedSms).toEqual(expect.objectContaining({
+      recipientPhone: normalizeKenyanPhoneNumber(fixture.user.phone),
+      status: "QUEUED",
+    }));
+    expect(acceptedSms.message).toContain(hospital.name);
+    expect(acceptedSms.message).toContain(formatAppointmentDate(appointment.date));
+    expect(acceptedSms.message).toContain(appointment.time);
+    expect(acceptedSms.message).toContain("Please avail yourself");
+
+    const repeatedAcceptance = await request(app)
+      .patch(`/api/hospital/appointments/${appointment.appointmentId}/status`)
+      .set("Authorization", `Bearer ${hospitalToken}`)
+      .send({ status: "CONFIRMED" });
+    expect(repeatedAcceptance.status).toBe(409);
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `appointment-${appointment.appointmentId}-accepted:sms` },
+    })).toBe(1);
+
+    const cancelled = await request(app)
+      .patch(`/api/hospital/appointments/${appointment.appointmentId}/status`)
+      .set("Authorization", `Bearer ${hospitalToken}`)
+      .send({ status: "CANCELLED" });
+    expect(cancelled.status).toBe(200);
+    expect(await prisma.smsOutbox.count({
+      where: {
+        eventKey: {
+          in: [
+            `appointment-${appointment.appointmentId}-accepted:sms`,
+            `appointment-${appointment.appointmentId}-cancelled:sms`,
+          ],
+        },
+      },
+    })).toBe(1);
+    expect(await prisma.notification.count({
+      where: { userId: fixture.user.userId, type: "APPOINTMENT_CANCELLED" },
+    })).toBe(1);
+    expect(await prisma.emailOutbox.count({
+      where: { recipientEmail: fixture.user.email, template: "APPOINTMENT_CANCELLED" },
+    })).toBe(1);
+  });
+
+  it("completes the KNBTS approval, appointment booking, and donation journey", async () => {
+    const fixture = await createDonor("integrated-donor-journey");
+    const latestVersion = await prisma.questionnaireVersion.findFirst({
+      orderBy: { versionNumber: "desc" },
+      select: { versionNumber: true },
+    });
+    const version = await prisma.questionnaireVersion.create({
+      data: {
+        versionNumber: (latestVersion?.versionNumber || 0) + 1,
+        title: "Integrated donor journey fixture",
+        status: "PUBLISHED",
+        publishedAt: new Date(),
+      },
+    });
+    questionnaireFixtureCleanup.trackVersion(version);
+    const submission = await prisma.donorQuestionnaireSubmission.create({
+      data: {
+        donorId: fixture.donor.donorId,
+        versionId: version.questionnaireVersionId,
+        status: "PENDING",
+        submittedAt: new Date(),
+        declarationAcknowledgedAt: new Date(),
+      },
+    });
+    questionnaireFixtureCleanup.trackSubmission(submission);
+    artifactTracker.trackAudit({
+      entityType: "DonorQuestionnaireSubmission",
+      entityId: String(submission.submissionId),
+    });
+    const knbtsToken = tokenFor({ userId: knbtsStaff.userId, role: "KNBTS_STAFF" });
+
+    const review = await request(app)
+      .post(`/api/knbts/questionnaire/submissions/${submission.submissionId}/review`)
+      .set("Authorization", `Bearer ${knbtsToken}`)
+      .send({ decision: "APPROVED" });
+    expect(review.status).toBe(200);
+
+    const assessment = await request(app)
+      .post(`/api/knbts/questionnaire/submissions/${submission.submissionId}/assessment`)
+      .set("Authorization", `Bearer ${knbtsToken}`)
+      .send({ decision: "ACCEPT", weightKg: 72.5, bloodPressure: "120/80" });
+    expect(assessment.status).toBe(200);
+
+    const issued = await request(app)
+      .post(`/api/knbts/questionnaire/submissions/${submission.submissionId}/approval`)
+      .set("Authorization", `Bearer ${knbtsToken}`);
+    expect(issued.status).toBe(201);
+    const approvalId = issued.body.data.approvalId;
+    artifactTracker.trackAudit({
+      entityType: "QuestionnaireApproval",
+      entityId: String(approvalId),
+    });
+    const slot = await createSlot();
+    const booking = await book(fixture, slot);
+    expect(booking.status).toBe(201);
+
+    const appointmentId = booking.body.data.appointment.appointmentId;
+    artifactTracker.trackAudit({
+      entityType: "Appointment",
+      entityId: String(appointmentId),
+    });
+    const hospitalStaff = await prisma.hospitalStaff.findFirst({
+      where: { hospitalId: hospital.hospitalId },
+    });
+    const hospitalToken = tokenFor({
+      userId: hospitalStaff.userId,
+      role: "HOSPITAL_STAFF",
+    });
+    await prisma.appointment.update({
+      where: { appointmentId },
+      data: { date: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000) },
+    });
+    const accepted = await request(app)
+      .patch(`/api/hospital/appointments/${appointmentId}/status`)
+      .set("Authorization", `Bearer ${hospitalToken}`)
+      .send({ status: "CONFIRMED" });
+    expect(accepted.status).toBe(200);
+    const completion = await request(app)
+      .post(`/api/hospital/appointments/${appointmentId}/donation`)
+      .set("Authorization", `Bearer ${hospitalToken}`)
+      .send({ quantity: 450, notes: "Integrated test completion" });
+
+    expect(completion.status).toBe(201);
+    expect(await prisma.questionnaireApproval.findUnique({ where: { approvalId } }))
+      .toEqual(expect.objectContaining({ status: "CONSUMED" }));
+    const donation = await prisma.donationRecord.findFirst({ where: { appointmentId } });
+    expect(donation)
+      .toEqual(expect.objectContaining({ quantity: 450, donorId: fixture.donor.donorId }));
+    artifactTracker.trackAudit({
+      entityType: "DonationRecord",
+      entityId: String(donation.donationId),
+    });
+    const eligibility = getDonationEligibility({
+      lastSuccessfulDonationDate: donation.donationDate,
+    });
+    const donationSms = await prisma.smsOutbox.findUnique({
+      where: { eventKey: `donation-${donation.donationId}-completed:sms` },
+    });
+    expect(donationSms).toEqual(expect.objectContaining({
+      recipientPhone: normalizeKenyanPhoneNumber(fixture.user.phone),
+      status: "QUEUED",
+    }));
+    expect(donationSms.message).toContain(formatAppointmentDate(donation.donationDate));
+    expect(donationSms.message).toContain(`${env.DONATION_WAITING_PERIOD_DAYS} days`);
+    expect(donationSms.message).toContain(
+      formatAppointmentDate(eligibility.nextEligibleDonationDate)
+    );
+    expect(await prisma.notification.count({
+      where: {
+        userId: fixture.user.userId,
+        type: { in: ["QUESTIONNAIRE_APPROVED", "APPOINTMENT_BOOKED", "DONATION_COMPLETED"] },
+      },
+    })).toBe(3);
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `appointment-${appointmentId}-booked:sms` },
+    })).toBe(0);
+    expect(await prisma.emailOutbox.count({
+      where: {
+        recipientEmail: fixture.user.email,
+        template: { in: ["QUESTIONNAIRE_APPROVED", "APPOINTMENT_BOOKED", "DONATION_COMPLETED"] },
+      },
+    })).toBe(3);
+    expect(await prisma.smsOutbox.count({
+      where: {
+        eventKey: {
+          in: [
+            `questionnaire-${submission.submissionId}-approved:sms`,
+            `appointment-${appointmentId}-accepted:sms`,
+            `donation-${donation.donationId}-completed:sms`,
+          ],
+        },
+        status: "QUEUED",
+      },
+    })).toBe(3);
+
   });
 });

@@ -5,6 +5,7 @@ const {
   SmsProviderError,
   normalizeKenyanPhoneNumber,
   createMobileSasaProvider,
+  isApprovedSmsEventKey,
   enqueueSmsOnce,
   processSmsOutbox,
   updateSmsDeliveryReport,
@@ -16,12 +17,15 @@ const { processAppointmentReminders, getNextNairobiDate } = require("../services
 const request = require("supertest");
 const app = require("../app");
 const env = require("../config/env");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("multi-channel notification delivery", () => {
   let user;
   const eventPrefix = `task7-${crypto.randomUUID()}`;
+  const artifactTracker = createTestArtifactTracker(prisma);
 
   beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
     user = await prisma.user.create({
       data: {
         firstName: "Notification",
@@ -33,17 +37,32 @@ describe("multi-channel notification delivery", () => {
         status: "ACTIVE",
       },
     });
+    artifactTracker.trackNotification({ userId: user.userId });
+    artifactTracker.trackEmail({ recipientEmail: user.email });
+    artifactTracker.trackSms({
+      OR: [
+        { eventKey: { startsWith: eventPrefix } },
+        { recipientPhone: { in: [user.phone, normalizeKenyanPhoneNumber(user.phone)].filter(Boolean) } },
+      ],
+    });
   });
 
   afterEach(async () => {
-    await prisma.notification.deleteMany({ where: { userId: user.userId } });
-    await prisma.smsOutbox.deleteMany({ where: { eventKey: { startsWith: eventPrefix } } });
-    await prisma.emailOutbox.deleteMany({ where: { recipientEmail: user.email } });
-    await prisma.user.delete({ where: { userId: user.userId } });
+    try {
+      await artifactTracker.cleanup();
+    } finally {
+      if (user?.userId) {
+        await prisma.user.deleteMany({ where: { userId: user.userId } });
+      }
+    }
   });
 
   afterAll(async () => {
-    await prisma.$disconnect();
+    try {
+      await artifactTracker.cleanup();
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   it.each([
@@ -97,8 +116,92 @@ describe("multi-channel notification delivery", () => {
     })).rejects.toMatchObject({ retryable: false, responseCode: "0422" });
   });
 
+  it("recognizes only the four approved SMS event key formats", () => {
+    expect([
+      "account-12-registered:sms",
+      "questionnaire-34-approved:sms",
+      "appointment-56-accepted:sms",
+      "donation-78-completed:sms",
+    ].every(isApprovedSmsEventKey)).toBe(true);
+    expect([
+      "questionnaire-34-submitted:sms",
+      "questionnaire-34-declined:sms",
+      "appointment-56-booked:sms",
+      "appointment-56-cancelled:sms",
+      "appointment-56-reminder:sms",
+      "emergency-90-donor-12:sms",
+      "inventory-low-7-staff-12:sms",
+    ].some(isApprovedSmsEventKey)).toBe(false);
+  });
+
+  it("does not process queued messages for events outside the approved SMS scope", async () => {
+    const timestamp = Date.now();
+    const eventKeys = [
+      `questionnaire-${timestamp}-submitted:sms`,
+      `questionnaire-${timestamp + 1}-declined:sms`,
+      `appointment-${timestamp}-booked:sms`,
+      `appointment-${timestamp + 1}-cancelled:sms`,
+      `appointment-${timestamp + 2}-reminder:sms`,
+      `questionnaire-not-a-number-approved:sms`,
+      `emergency-${timestamp}-donor-12:sms`,
+      `inventory-low-${timestamp}-staff-12:sms`,
+    ];
+    const provider = { send: jest.fn() };
+
+    for (const eventKey of eventKeys) {
+      const { sms } = await prisma.$transaction((tx) =>
+        enqueueSmsOnce(tx, user.phone, "Must remain queued.", eventKey)
+      );
+      await expect(processSmsOutbox(
+        new Date(Date.now() + 60_000),
+        provider,
+        { eventKey }
+      )).resolves.toBe(0);
+      expect(await prisma.smsOutbox.findUnique({
+        where: { smsId: sms.smsId },
+      })).toEqual(expect.objectContaining({ status: "QUEUED", attempts: 0 }));
+    }
+
+    expect(provider.send).not.toHaveBeenCalled();
+  });
+
+  it("does not process the dedicated live-test event namespace", async () => {
+    const eventKey = `mobilesasa-live-test:${crypto.randomUUID()}`;
+    const { sms } = await prisma.$transaction((tx) =>
+      enqueueSmsOnce(tx, user.phone, "Isolated live-test namespace.", eventKey)
+    );
+    const provider = { send: jest.fn() };
+
+    await expect(processSmsOutbox(
+      new Date(Date.now() + 60_000),
+      provider,
+      { eventKey }
+    )).resolves.toBe(0);
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(await prisma.smsOutbox.findUnique({ where: { smsId: sms.smsId } }))
+      .toEqual(expect.objectContaining({ status: "QUEUED", attempts: 0 }));
+  });
+
+  it("does not change a live-test record during normal-worker stale processing cleanup", async () => {
+    const eventKey = `mobilesasa-live-test:${crypto.randomUUID()}`;
+    const { sms } = await prisma.$transaction((tx) =>
+      enqueueSmsOnce(tx, user.phone, "Isolated live-test namespace.", eventKey)
+    );
+    const processingAt = new Date(Date.now() - 11 * 60 * 1000);
+    await prisma.smsOutbox.update({
+      where: { smsId: sms.smsId },
+      data: { status: "PROCESSING", processingAt },
+    });
+    const provider = { send: jest.fn() };
+
+    await expect(processSmsOutbox(new Date(), provider, { eventKey })).resolves.toBe(0);
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(await prisma.smsOutbox.findUnique({ where: { smsId: sms.smsId } }))
+      .toEqual(expect.objectContaining({ status: "PROCESSING", processingAt }));
+  });
+
   it("deduplicates SMS queue records, retries transient failures and records handset delivery", async () => {
-    const eventKey = `${eventPrefix}-sms-retry`;
+    const eventKey = `questionnaire-${Date.now()}-approved:sms`;
     const first = await prisma.$transaction((tx) =>
       enqueueSmsOnce(tx, "0712345678", "Your appointment is tomorrow.", eventKey)
     );
@@ -231,14 +334,14 @@ describe("multi-channel notification delivery", () => {
       .toEqual(expect.objectContaining({ status: "ACCEPTED", acceptedAt: expect.any(Date) }));
   });
 
-  it("queues in-app, email, and SMS atomically after its caller commits", async () => {
+  it("queues in-app, email, and an approved SMS atomically after its caller commits", async () => {
     const eventKey = `${eventPrefix}-multi`;
     await prisma.$transaction((tx) => notifyUser(tx, {
       userId: user.userId,
       email: user.email,
       phone: user.phone,
       eventKey,
-      type: "TEST_MULTI_CHANNEL",
+      type: "QUESTIONNAIRE_APPROVED",
       title: "Test update",
       message: "A test update.",
       emailTemplate: "WELCOME",
@@ -247,7 +350,11 @@ describe("multi-channel notification delivery", () => {
     }));
 
     expect(await prisma.notification.count({
-      where: { userId: user.userId, type: "TEST_MULTI_CHANNEL" },
+      where: {
+        userId: user.userId,
+        type: "QUESTIONNAIRE_APPROVED",
+        message: "A test update.",
+      },
     })).toBe(1);
     expect(await prisma.emailOutbox.count({
       where: { recipientEmail: user.email, template: "WELCOME" },
@@ -263,7 +370,7 @@ describe("multi-channel notification delivery", () => {
         email: user.email,
         phone: user.phone,
         eventKey: rolledBackKey,
-        type: "TEST_ROLLBACK",
+        type: "QUESTIONNAIRE_APPROVED",
         title: "Must not persist",
         message: "A transaction that will roll back.",
         emailTemplate: "WELCOME",
@@ -272,9 +379,29 @@ describe("multi-channel notification delivery", () => {
       });
       throw new Error("rollback");
     })).rejects.toThrow("rollback");
-    expect(await prisma.notification.count({ where: { userId: user.userId, type: "TEST_ROLLBACK" } })).toBe(0);
+    expect(await prisma.notification.count({
+      where: { userId: user.userId, type: "QUESTIONNAIRE_APPROVED" },
+    })).toBe(1);
     expect(await prisma.emailOutbox.count({ where: { recipientEmail: user.email, template: "WELCOME" } })).toBe(1);
     expect(await prisma.smsOutbox.count({ where: { eventKey: `${rolledBackKey}:sms` } })).toBe(0);
+  });
+
+  it("rejects SMS requests for events outside the approved event list", async () => {
+    const eventKey = `${eventPrefix}-unapproved`;
+    await expect(prisma.$transaction((tx) => notifyUser(tx, {
+      userId: user.userId,
+      email: user.email,
+      phone: user.phone,
+      eventKey,
+      type: "TEST_UNAPPROVED_EVENT",
+      title: "Test update",
+      message: "An event that is not approved for SMS.",
+      smsMessage: "This must not be queued.",
+    }))).rejects.toThrow("SMS is not enabled for notification event: TEST_UNAPPROVED_EVENT.");
+    expect(await prisma.smsOutbox.count({ where: { eventKey: `${eventKey}:sms` } })).toBe(0);
+    expect(await prisma.notification.count({
+      where: { userId: user.userId, type: "TEST_UNAPPROVED_EVENT" },
+    })).toBe(0);
   });
 
   it("retries email failures and does not resend a successfully accepted outbox message", async () => {
@@ -348,7 +475,7 @@ describe("multi-channel notification delivery", () => {
   });
 
   it("preserves a terminal SMS delivery report that races a provider error", async () => {
-    const eventKey = `${eventPrefix}-sms-race`;
+    const eventKey = `donation-${Date.now()}-completed:sms`;
     const { sms } = await prisma.$transaction((tx) =>
       enqueueSmsOnce(tx, user.phone, "Race condition test.", eventKey)
     );
@@ -380,8 +507,28 @@ describe("multi-channel notification delivery", () => {
       where: { hospitalId: hospitalStaff.hospitalId },
     });
     const donor = await prisma.user.findFirst({ where: { role: "DONOR" }, select: { userId: true } });
+    const activeStaff = await prisma.hospitalStaff.findMany({
+      where: {
+        hospitalId: hospitalStaff.hospitalId,
+        user: { status: "ACTIVE", role: "HOSPITAL_STAFF" },
+      },
+      select: { user: { select: { userId: true, email: true } } },
+    });
     const startedAt = new Date();
     const alertKey = `${eventPrefix}-inventory`;
+    artifactTracker.trackNotification({
+      userId: { in: activeStaff.map(({ user: staffUser }) => staffUser.userId) },
+      type: "HOSPITAL_INVENTORY_ALERT",
+    });
+    artifactTracker.trackSms({ eventKey: { startsWith: `${alertKey}-staff-` } });
+    artifactTracker.trackEmail({
+      recipientEmail: { in: activeStaff.map(({ user: staffUser }) => staffUser.email) },
+      template: "INVENTORY_ALERT",
+    });
+    artifactTracker.trackAudit({
+      action: "HOSPITAL_LOW_INVENTORY_ALERT_QUEUED",
+      entityId: String(inventory.inventoryId),
+    });
 
     await prisma.$transaction((tx) => queueHospitalInventoryAlert(tx, {
       inventory: { ...inventory, unitsAvailable: 0, minimumUnits: 5 },
@@ -389,16 +536,9 @@ describe("multi-channel notification delivery", () => {
       actorUserId: hospitalStaff.userId,
     }));
 
-    const activeStaff = await prisma.hospitalStaff.findMany({
-      where: {
-        hospitalId: hospitalStaff.hospitalId,
-        user: { status: "ACTIVE", role: "HOSPITAL_STAFF" },
-      },
-      select: { userId: true },
-    });
     const notifications = await prisma.notification.findMany({
       where: {
-        userId: { in: activeStaff.map(({ userId }) => userId) },
+        userId: { in: activeStaff.map(({ user: staffUser }) => staffUser.userId) },
         type: "HOSPITAL_INVENTORY_ALERT",
         createdAt: { gte: startedAt },
       },
@@ -406,34 +546,17 @@ describe("multi-channel notification delivery", () => {
     expect(notifications.length).toBe(activeStaff.length);
     expect(notifications.some(({ userId }) => userId === donor?.userId)).toBe(false);
     expect(await prisma.smsOutbox.count({
-      where: { eventKey: { startsWith: `${alertKey}-staff-` }, status: "QUEUED" },
-    })).toBe(activeStaff.length);
-    await prisma.notification.deleteMany({
-      where: { notificationId: { in: notifications.map(({ notificationId }) => notificationId) } },
-    });
-    await prisma.smsOutbox.deleteMany({ where: { eventKey: { startsWith: `${alertKey}-staff-` } } });
-    const activeStaffUsers = await prisma.hospitalStaff.findMany({
-      where: { hospitalId: hospitalStaff.hospitalId, user: { role: "HOSPITAL_STAFF" } },
-      select: { user: { select: { email: true } } },
-    });
-    await prisma.emailOutbox.deleteMany({
+      where: { eventKey: { startsWith: `${alertKey}-staff-` } },
+    })).toBe(0);
+    expect(await prisma.emailOutbox.count({
       where: {
-        recipientEmail: { in: activeStaffUsers.map(({ user: staffUser }) => staffUser.email) },
+        recipientEmail: { in: activeStaff.map(({ user: staffUser }) => staffUser.email) },
         template: "INVENTORY_ALERT",
-        createdAt: { gte: startedAt },
       },
-    });
-    await prisma.auditLog.deleteMany({
-      where: {
-        action: "HOSPITAL_LOW_INVENTORY_ALERT_QUEUED",
-        entityId: String(inventory.inventoryId),
-        createdAt: { gte: startedAt },
-      },
-    });
-
+    })).toBe(activeStaff.length);
   });
 
-  it("queues a single in-app and SMS reminder for the next Nairobi appointment day", async () => {
+  it("queues a single in-app reminder without an SMS for the next Nairobi appointment day", async () => {
     const hospital = await prisma.hospital.findFirst({
       where: { institutionType: "HOSPITAL", isActive: true },
     });
@@ -459,6 +582,13 @@ describe("multi-channel notification delivery", () => {
         status: "SCHEDULED",
       },
     });
+    artifactTracker.trackNotification({
+      userId: user.userId,
+      type: "APPOINTMENT_REMINDER",
+    });
+    artifactTracker.trackSms({
+      eventKey: `appointment-${appointment.appointmentId}-reminder:sms`,
+    });
     try {
       expect(await processAppointmentReminders(now, { appointmentId: appointment.appointmentId })).toBe(1);
       expect(await processAppointmentReminders(now, { appointmentId: appointment.appointmentId })).toBe(0);
@@ -472,11 +602,11 @@ describe("multi-channel notification delivery", () => {
       ]);
       expect(notification.message).toContain(hospital.name);
       expect(notification.message).toContain("10:00");
-      expect(sms.status).toBe("QUEUED");
+      expect(sms).toBeNull();
+      expect(await prisma.notification.count({
+        where: { userId: user.userId, type: "APPOINTMENT_REMINDER" },
+      })).toBe(1);
     } finally {
-      await prisma.smsOutbox.deleteMany({
-        where: { eventKey: `appointment-${appointment.appointmentId}-reminder:sms` },
-      });
       await prisma.appointment.delete({ where: { appointmentId: appointment.appointmentId } });
       await prisma.donor.delete({ where: { donorId: donor.donorId } });
     }

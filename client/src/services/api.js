@@ -135,6 +135,36 @@ export const donorAPI = {
     const result = await api.post(`/donor/alerts/${requestId}/respond`, { response });
     return result.data;
   },
+  getCurrentQuestionnaire: async () => {
+    const response = await api.get("/donor/questionnaire/current");
+    return response.data;
+  },
+  createQuestionnaireDraft: async () => {
+    const response = await api.post("/donor/questionnaire/submissions", {});
+    return response.data;
+  },
+  getQuestionnaireSubmissions: async () => {
+    const response = await api.get("/donor/questionnaire/submissions");
+    return response.data;
+  },
+  getQuestionnaireSubmission: async (submissionId) => {
+    const response = await api.get(`/donor/questionnaire/submissions/${submissionId}`);
+    return response.data;
+  },
+  saveQuestionnaireAnswers: async (submissionId, answers) => {
+    const response = await api.put(`/donor/questionnaire/submissions/${submissionId}/answers`, { answers });
+    return response.data;
+  },
+  deleteQuestionnaireAnswer: async (submissionId, questionId) => {
+    const response = await api.delete(`/donor/questionnaire/submissions/${submissionId}/answers/${questionId}`);
+    return response.data;
+  },
+  submitQuestionnaire: async (submissionId) => {
+    const response = await api.post(`/donor/questionnaire/submissions/${submissionId}/submit`, {
+      declarationAcknowledged: true,
+    });
+    return response.data;
+  },
 };
 
 export const notificationsAPI = {
@@ -222,6 +252,44 @@ export const hospitalAPI = {
 export const knbtsAPI = {
   getProfile: async () => {
     const response = await api.get("/knbts/profile");
+    return response.data;
+  },
+  getQuestionnaireSubmissions: async (params = {}) => {
+    const response = await api.get("/knbts/questionnaire/submissions", { params });
+    return response.data;
+  },
+  getQuestionnaireDashboard: async () => {
+    const response = await api.get("/knbts/questionnaire/submissions", {
+      params: { page: 1, pageSize: 5, dashboard: "true" },
+    });
+    return response.data;
+  },
+  getQuestionnaireSubmission: async (submissionId) => {
+    const response = await api.get(`/knbts/questionnaire/submissions/${submissionId}`);
+    return response.data;
+  },
+  reviewQuestionnaire: async (submissionId, decision, declineReason, internalNote) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/review`, {
+      decision,
+      ...(declineReason ? { declineReason } : {}),
+      ...(internalNote ? { internalNote } : {}),
+    });
+    return response.data;
+  },
+  assessQuestionnaire: async (submissionId, assessment) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/assessment`, assessment);
+    return response.data;
+  },
+  issueQuestionnaireApproval: async (submissionId) => {
+    const response = await api.post(`/knbts/questionnaire/submissions/${submissionId}/approval`);
+    return response.data;
+  },
+  getQuestionnaireApprovals: async (params = {}) => {
+    const response = await api.get("/knbts/questionnaire/approvals", { params });
+    return response.data;
+  },
+  getQuestionnaireApproval: async (approvalId) => {
+    const response = await api.get(`/knbts/questionnaire/approvals/${approvalId}`);
     return response.data;
   },
 };

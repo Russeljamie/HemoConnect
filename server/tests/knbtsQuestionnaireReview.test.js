@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { createQuestionnaireFixtureCleanup } = require("./helpers/questionnaireFixtureCleanup");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("KNBTS questionnaire review, assessment and approval workflow", () => {
   let knbtsToken;
@@ -13,8 +15,9 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
   let donorUser;
   let donor;
   let publishedVersion;
+  const fixtureCleanup = createQuestionnaireFixtureCleanup(prisma);
+  const artifactTracker = createTestArtifactTracker(prisma);
   const submissionIds = [];
-  const auditIds = [];
 
   const tokenFor = (user) => jwt.sign(
     { userId: user.userId, role: user.role },
@@ -37,6 +40,15 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       },
     });
     submissionIds.push(submission.submissionId);
+    fixtureCleanup.trackSubmission(submission);
+    artifactTracker.trackSms({
+      eventKey: {
+        in: [
+          `questionnaire-${submission.submissionId}-declined:sms`,
+          `questionnaire-${submission.submissionId}-approved:sms`,
+        ],
+      },
+    });
     return submission;
   };
 
@@ -69,51 +81,39 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
         publishedAt: new Date(),
       },
     });
+    fixtureCleanup.trackVersion(publishedVersion);
   });
 
   afterAll(async () => {
-    await prisma.questionnaireVersion.delete({
-      where: { questionnaireVersionId: publishedVersion.questionnaireVersionId },
+    try {
+      await artifactTracker.cleanup();
+    } finally {
+      try {
+        await fixtureCleanup.cleanup({ deleteVersions: true });
+      } finally {
+        await prisma.$disconnect();
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+    artifactTracker.trackNotification({
+      userId: donorUser.userId,
+      type: { in: ["QUESTIONNAIRE_DECLINED", "QUESTIONNAIRE_APPROVED"] },
+    });
+    artifactTracker.trackEmail({
+      recipientEmail: donorUser.email,
+      template: { in: ["QUESTIONNAIRE_DECLINED", "QUESTIONNAIRE_APPROVED"] },
     });
   });
 
   afterEach(async () => {
-    await prisma.notification.deleteMany({
-      where: { userId: donorUser.userId, type: { in: ["QUESTIONNAIRE_DECLINED", "QUESTIONNAIRE_APPROVED"] } },
-    });
-    await prisma.emailOutbox.deleteMany({
-      where: {
-        recipientEmail: donorUser.email,
-        template: { in: ["QUESTIONNAIRE_DECLINED", "QUESTIONNAIRE_APPROVED"] },
-      },
-    });
-    await prisma.smsOutbox.deleteMany({
-      where: {
-        eventKey: {
-          in: submissionIds.flatMap((id) => [
-            `questionnaire-${id}-declined:sms`,
-            `questionnaire-${id}-approved:sms`,
-          ]),
-        },
-      },
-    });
-    if (submissionIds.length) {
-      await prisma.auditLog.deleteMany({
-        where: {
-          entityType: { in: ["DonorQuestionnaireSubmission", "QuestionnaireApproval"] },
-          entityId: { in: submissionIds.map(String) },
-        },
-      });
-      await prisma.questionnaireApproval.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireClinicalAssessment.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireReview.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireAnswer.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.donorQuestionnaireSubmission.deleteMany({ where: { submissionId: { in: submissionIds } } });
+    try {
+      await artifactTracker.cleanup();
+    } finally {
+      await fixtureCleanup.cleanup();
       submissionIds.length = 0;
-    }
-    if (auditIds.length) {
-      await prisma.auditLog.deleteMany({ where: { auditLogId: { in: auditIds } } });
-      auditIds.length = 0;
     }
   });
 
@@ -130,6 +130,46 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
     expect(response.status).toBe(200);
     expect(response.body.data.submissions).toEqual(expect.arrayContaining([
       expect.objectContaining({ submissionId: submission.submissionId, status: "PENDING" }),
+    ]));
+    expect(response.body.data.dashboard).toBeUndefined();
+  });
+
+  it("returns database-backed dashboard counts and recent submission activity", async () => {
+    const approved = await createPendingSubmission();
+    const approvedReview = await request(app)
+      .post(`/api/knbts/questionnaire/submissions/${approved.submissionId}/review`)
+      .set("Authorization", `Bearer ${knbtsToken}`)
+      .send({ decision: "APPROVED" });
+    expect(approvedReview.status).toBe(200);
+
+    const declined = await createPendingSubmission();
+    const declinedReview = await request(app)
+      .post(`/api/knbts/questionnaire/submissions/${declined.submissionId}/review`)
+      .set("Authorization", `Bearer ${knbtsToken}`)
+      .send({ decision: "DECLINED", declineReason: "Dashboard fixture" });
+    expect(declinedReview.status).toBe(200);
+
+    const pending = await createPendingSubmission();
+    const [pendingCount, approvedCount, declinedCount] = await Promise.all([
+      prisma.donorQuestionnaireSubmission.count({ where: { status: "PENDING" } }),
+      prisma.donorQuestionnaireSubmission.count({ where: { status: "APPROVED" } }),
+      prisma.donorQuestionnaireSubmission.count({ where: { status: "DECLINED" } }),
+    ]);
+    const response = await request(app)
+      .get("/api/knbts/questionnaire/submissions?page=1&pageSize=5&dashboard=true")
+      .set("Authorization", `Bearer ${knbtsToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.dashboard.counts).toEqual({
+      pending: pendingCount,
+      approved: approvedCount,
+      declined: declinedCount,
+    });
+    expect(response.body.data.submissions).toEqual([]);
+    expect(response.body.data.dashboard.recentSubmissions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ submissionId: pending.submissionId, status: "PENDING" }),
+      expect.objectContaining({ submissionId: approved.submissionId, status: "APPROVED" }),
+      expect.objectContaining({ submissionId: declined.submissionId, status: "DECLINED" }),
     ]));
   });
 
@@ -150,6 +190,9 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       .send({ decision: "APPROVED", internalNote: "Reviewed" });
     expect(first.status).toBe(200);
     expect(first.body.data.decision).toBe("APPROVED");
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `questionnaire-${submission.submissionId}-approved:sms` },
+    })).toBe(0);
 
     const duplicate = await request(app)
       .post(`/api/knbts/questionnaire/submissions/${submission.submissionId}/review`)
@@ -165,10 +208,8 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       .set("Authorization", `Bearer ${knbtsToken}`)
       .send({ decision: "DECLINED", declineReason: "   " });
     expect(blank.status).toBe(400);
-    await prisma.donorQuestionnaireSubmission.delete({
-      where: { submissionId: blankSubmission.submissionId },
-    });
-    submissionIds.splice(submissionIds.indexOf(blankSubmission.submissionId), 1);
+    await fixtureCleanup.cleanup();
+    submissionIds.length = 0;
 
     const submission = await createPendingSubmission();
     const response = await request(app)
@@ -177,6 +218,15 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       .send({ decision: "DECLINED", declineReason: "  Answer   inconsistency  " });
     expect(response.status).toBe(200);
     expect(response.body.data.declineReason).toBe("Answer inconsistency");
+    expect(await prisma.notification.count({
+      where: { userId: donorUser.userId, type: "QUESTIONNAIRE_DECLINED" },
+    })).toBe(1);
+    expect(await prisma.emailOutbox.count({
+      where: { recipientEmail: donorUser.email, template: "QUESTIONNAIRE_DECLINED" },
+    })).toBe(1);
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `questionnaire-${submission.submissionId}-declined:sms` },
+    })).toBe(0);
   });
 
   it("handles concurrent review attempts with only one final decision", async () => {
@@ -199,20 +249,8 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       .send({ decision: "ACCEPT", weightKg: 72.5, bloodPressure: "120/80" });
     expect(accept.status).toBe(200);
     expect(accept.body.data.decision).toBe("ACCEPT");
-
-    await prisma.questionnaireClinicalAssessment.deleteMany({
-      where: { submissionId: acceptSubmission.submissionId },
-    });
-    await prisma.questionnaireApproval.deleteMany({
-      where: { submissionId: acceptSubmission.submissionId },
-    });
-    await prisma.questionnaireReview.deleteMany({
-      where: { submissionId: acceptSubmission.submissionId },
-    });
-    await prisma.donorQuestionnaireSubmission.delete({
-      where: { submissionId: acceptSubmission.submissionId },
-    });
-    submissionIds.splice(submissionIds.indexOf(acceptSubmission.submissionId), 1);
+    await fixtureCleanup.cleanup();
+    submissionIds.length = 0;
 
     const deferSubmission = await createPendingSubmission();
     const missing = await request(app)
@@ -286,6 +324,9 @@ describe("KNBTS questionnaire review, assessment and approval workflow", () => {
       .post(`/api/knbts/questionnaire/submissions/${submission.submissionId}/approval`)
       .set("Authorization", `Bearer ${knbtsToken}`);
     expect(duplicate.status).toBe(409);
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `questionnaire-${submission.submissionId}-approved:sms` },
+    })).toBe(1);
   });
 
   it("transitions expired ACTIVE approvals and preserves historical status", async () => {

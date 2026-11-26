@@ -56,9 +56,10 @@ const getPendingQueue = async (userId, query = {}) => {
   const page = parsePositiveInteger(query.page) || 1;
   const pageSizeValue = parsePositiveInteger(query.pageSize) || 20;
   const pageSize = Math.min(pageSizeValue, 100);
+  const dashboardOnly = query.dashboard === "true";
 
   const [submissions, total] = await Promise.all([
-    prisma.donorQuestionnaireSubmission.findMany({
+    dashboardOnly ? [] : prisma.donorQuestionnaireSubmission.findMany({
       where: { status: "PENDING" },
       orderBy: [{ submittedAt: "asc" }, { submissionId: "asc" }],
       skip: (page - 1) * pageSize,
@@ -87,6 +88,37 @@ const getPendingQueue = async (userId, query = {}) => {
     prisma.donorQuestionnaireSubmission.count({ where: { status: "PENDING" } }),
   ]);
 
+  let dashboard;
+  if (dashboardOnly) {
+    const [approved, declined, recentSubmissions] = await Promise.all([
+      prisma.donorQuestionnaireSubmission.count({ where: { status: "APPROVED" } }),
+      prisma.donorQuestionnaireSubmission.count({ where: { status: "DECLINED" } }),
+      prisma.donorQuestionnaireSubmission.findMany({
+        where: { status: { in: ["PENDING", "APPROVED", "DECLINED"] } },
+        orderBy: [{ submittedAt: "desc" }, { submissionId: "desc" }],
+        take: 5,
+        select: {
+          submissionId: true,
+          status: true,
+          submittedAt: true,
+          donorInformationSnapshot: true,
+          donor: {
+            select: {
+              donorId: true,
+              firstName: true,
+              lastName: true,
+              bloodType: true,
+            },
+          },
+        },
+      }),
+    ]);
+    dashboard = {
+      counts: { pending: total, approved, declined },
+      recentSubmissions,
+    };
+  }
+
   return {
     submissions,
     pagination: {
@@ -95,6 +127,7 @@ const getPendingQueue = async (userId, query = {}) => {
       total,
       totalPages: Math.ceil(total / pageSize),
     },
+    ...(dashboard ? { dashboard } : {}),
   };
 };
 
@@ -205,7 +238,6 @@ const recordReviewDecision = async (userId, submissionId, body = {}) => {
           message: "Your donor questionnaire was not approved by KNBTS. Sign in to review the decision and next steps.",
           emailTemplate: "QUESTIONNAIRE_DECLINED",
           emailPayload: { name: `${donor?.firstName || ""} ${donor?.lastName || ""}`.trim() },
-          smsMessage: "Your HemoConnect donor questionnaire was not approved by KNBTS. Sign in to review the decision and next steps.",
         });
       }
       return review;

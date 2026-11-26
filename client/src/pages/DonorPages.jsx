@@ -258,6 +258,7 @@ export function DonorDonationsPage() {
 export function DonorAppointmentsPage() {
   const [appointments, setAppointments] = useState([]);
   const [donationEligibility, setDonationEligibility] = useState(null);
+  const [questionnaireStatus, setQuestionnaireStatus] = useState(null);
   const [location, setLocation] = useState(null);
   const [nearbyHospitals, setNearbyHospitals] = useState([]);
   const [selectedHospital, setSelectedHospital] = useState(null);
@@ -293,6 +294,20 @@ export function DonorAppointmentsPage() {
       })
       .catch((requestError) => {
         if (!cancelled) setError(errorMessage(requestError, "Unable to load your donation interval."));
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    donorAPI.getQuestionnaireSubmissions()
+      .then((response) => {
+        if (cancelled) return;
+        const submissions = response.data?.submissions || [];
+        setQuestionnaireStatus(submissions[0]?.status || null);
+      })
+      .catch(() => {
+        if (!cancelled) setQuestionnaireStatus(null);
       });
     return () => { cancelled = true; };
   }, []);
@@ -483,6 +498,15 @@ export function DonorAppointmentsPage() {
           : "Hospital staff will make the final medical clearance decision for every donation."}
         {" "}This scheduling interval does not replace hospital medical screening.
       </p>
+      {questionnaireStatus && (
+        <p className="donor-location-map-help">
+          Questionnaire status: <strong>{questionnaireStatus}</strong>.
+          {questionnaireStatus === "PENDING" && " Your questionnaire is awaiting KNBTS review, so approval has not been issued yet."}
+          {questionnaireStatus === "APPROVED" && " KNBTS has reviewed this submission; final booking eligibility is confirmed by the server."}
+          {questionnaireStatus === "DECLINED" && " This submission was declined. Complete a new questionnaire only when eligible."}
+          {questionnaireStatus === "DRAFT" && " Complete and submit the questionnaire before booking with an approval."}
+        </p>
+      )}
       <form className="donor-appointment-form" onSubmit={bookAppointment}>
         <label>Available appointment slot
           <select value={form.slotId} onChange={(event) => setForm({ ...form, slotId: event.target.value })} required disabled={!selectedHospital || slotsLoading}>
@@ -570,7 +594,15 @@ export function DonorAlertsPage() {
         : alerts.length === 0 ? <div className="donor-page-state">There are no matching open requests right now.</div>
           : <div className="donor-alert-list">{alerts.map((alert) => <article className="donor-alert-row" key={alert.requestId}>
             <div className="donor-alert-symbol"><AlertTriangle size={19} /></div>
-            <div className="donor-alert-content"><strong>{alert.bloodType} blood needed · {alert.urgencyLevel}</strong><span>{alert.hospital?.name || "Nearby request"}</span><small>{alert.distanceKm.toFixed(1)} km away · Alert wave {alert.wave}</small></div>
+            <div className="donor-alert-content">
+              <strong>{alert.bloodType} blood needed · {alert.urgencyLevel}</strong>
+              <span>{alert.hospital?.name || "Nearby request"}</span>
+              <small>{Number.isFinite(alert.distanceKm) ? `${alert.distanceKm.toFixed(1)} km away` : "Nearby"} · Alert wave {alert.wave}</small>
+              <small>{alert.hospital?.location || (Number.isFinite(alert.latitude) && Number.isFinite(alert.longitude)
+                ? `${alert.latitude.toFixed(4)}, ${alert.longitude.toFixed(4)}`
+                : "Location not provided")}</small>
+              {alert.notes && <p>{alert.notes}</p>}
+            </div>
             <div className="donor-alert-meta"><span>{alert.quantityRequired} units</span><small>Needed by {formatDate(alert.neededBy)}</small>
               {alert.matchStatus === "NOTIFIED" ? <div className="donor-alert-actions">
                 <button type="button" className="primary-button" disabled={busyRequestId === alert.requestId} onClick={() => respondToAlert(alert.requestId, "ACCEPT")}>Accept</button>

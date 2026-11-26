@@ -1,4 +1,5 @@
 const {
+  assertTestDatabaseIdentity,
   validateTestDatabaseUrls,
 } = require("../../scripts/test-db-safety");
 
@@ -35,5 +36,11 @@ describe("test database URL safety", () => {
     expect(
       validateTestDatabaseUrls(testDatabaseUrl, developmentDatabaseUrl)
     ).toEqual({ databaseName: "hemoconnect_test", host: "localhost" });
+  });
+
+  test("accepts only the actual hemoconnect_test database identity", () => {
+    expect(assertTestDatabaseIdentity("hemoconnect_test")).toBe("hemoconnect_test");
+    expect(() => assertTestDatabaseIdentity("Hemoconnect"))
+      .toThrow(/connected database "Hemoconnect" must be "hemoconnect_test"/);
   });
 });

@@ -605,7 +605,7 @@ const finalizeSubmission = async (userId, submissionIdValue, declarationAcknowle
         answerOption: answer.answerOption,
       }]));
 
-      for (const question of questions.filter(q => q.isDerived || q.answerType === "DERIVED_YES_NO")) {
+      for (const question of questions.filter(q => q.answerType === "DERIVED_YES_NO")) {
         const children = questions.filter(child => child.parentQuestionId === question.questionnaireQuestionId);
         const derivedValue = children.some(child => isAffirmative(answerMap.get(child.questionnaireQuestionId)));
         const derived = {

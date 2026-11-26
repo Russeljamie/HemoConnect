@@ -4,11 +4,32 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { normalizeKenyanPhoneNumber } = require("../services/sms");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("Hospital staff operations and authorization", () => {
   let staffToken;
   let staffUser;
   let donorUser;
+  const artifactTracker = createTestArtifactTracker(prisma);
+
+  const trackRequestArtifacts = async (requestId) => {
+    const matches = await prisma.requestMatch.findMany({
+      where: { requestId },
+      include: { donor: { select: { user: { select: { email: true } } } } },
+    });
+    artifactTracker.trackNotification({ requestId });
+    artifactTracker.trackSms({ eventKey: { startsWith: `emergency-${requestId}-` } });
+    artifactTracker.trackEmail({
+      recipientEmail: { in: matches.map(({ donor }) => donor.user.email) },
+      template: "DONOR_EMERGENCY_ALERT",
+    });
+    artifactTracker.trackAudit({
+      entityType: "EmergencyRequest",
+      entityId: String(requestId),
+    });
+    await artifactTracker.capture();
+  };
 
   beforeAll(async () => {
     [staffUser, donorUser] = await Promise.all([
@@ -26,6 +47,14 @@ describe("Hospital staff operations and authorization", () => {
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
+  });
+
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+  });
+
+  afterEach(async () => {
+    await artifactTracker.cleanup();
   });
 
   it("returns hospital profile and inventory scoped to its hospital", async () => {
@@ -49,6 +78,10 @@ describe("Hospital staff operations and authorization", () => {
       where: { hospitalId: staffUser.hospitalStaff.hospitalId },
     });
     const reason = `Hospital API test ${Date.now()}`;
+    artifactTracker.trackAudit({
+      entityType: "BloodInventory",
+      entityId: String(original.inventoryId),
+    });
     try {
       const response = await request(app)
         .patch("/api/hospital/inventory")
@@ -82,6 +115,10 @@ describe("Hospital staff operations and authorization", () => {
         patientReference: "CLAIM-TEST",
       },
     });
+    artifactTracker.trackAudit({
+      entityType: "EmergencyRequest",
+      entityId: String(emergencyRequest.requestId),
+    });
     try {
       const claimResponse = await request(app)
         .patch(`/api/hospital/requests/${emergencyRequest.requestId}`)
@@ -98,9 +135,6 @@ describe("Hospital staff operations and authorization", () => {
       expect(releaseResponse.body.data.request.status).toBe("OPEN");
       expect(releaseResponse.body.data.request.hospitalId).toBeNull();
     } finally {
-      await prisma.auditLog.deleteMany({
-        where: { entityType: "EmergencyRequest", entityId: String(emergencyRequest.requestId) },
-      });
       await prisma.emergencyRequest.delete({ where: { requestId: emergencyRequest.requestId } });
     }
   });
@@ -136,8 +170,9 @@ describe("Hospital staff operations and authorization", () => {
           longitude: 36.817223,
           patientReference: "WARD-NP-100",
         });
+      requestId = createResponse.body.data?.request?.requestId;
+      if (requestId) await trackRequestArtifacts(requestId);
       expect(createResponse.status).toBe(201);
-      requestId = createResponse.body.data.request.requestId;
       expect(createResponse.body.data.request).toEqual(expect.objectContaining({
         hospitalId,
         requestedByUserId: staffUser.userId,
@@ -181,9 +216,8 @@ describe("Hospital staff operations and authorization", () => {
       expect(transactions.reduce((sum, item) => sum + item.unitsChanged, 0)).toBe(-2);
     } finally {
       if (requestId) {
-        await prisma.notification.deleteMany({ where: { requestId } });
+        await trackRequestArtifacts(requestId);
         await prisma.inventoryTransaction.deleteMany({ where: { requestId } });
-        await prisma.auditLog.deleteMany({ where: { entityType: "EmergencyRequest", entityId: String(requestId) } });
         await prisma.emergencyRequest.delete({ where: { requestId } });
       }
       if (createdInventory) {
@@ -343,6 +377,21 @@ describe("Hospital staff operations and authorization", () => {
         },
       });
       appointmentId = appointment.appointmentId;
+      artifactTracker.trackNotification({
+        userId: donorUser.userId,
+        type: "APPOINTMENT_CANCELLED",
+      });
+      artifactTracker.trackSms({
+        eventKey: `appointment-${appointmentId}-cancelled:sms`,
+      });
+      artifactTracker.trackEmail({
+        recipientEmail: donorUser.email,
+        template: "APPOINTMENT_CANCELLED",
+      });
+      artifactTracker.trackAudit({
+        entityType: "Appointment",
+        entityId: String(appointmentId),
+      });
 
       const cancelResponse = await request(app)
         .patch(`/api/hospital/appointments/${appointmentId}/status`)
@@ -384,8 +433,28 @@ describe("Hospital staff operations and authorization", () => {
         .post(`/api/hospital/appointments/${appointment.appointmentId}/donation`)
         .set("Authorization", `Bearer ${staffToken}`)
         .send({ quantity: 450, notes: "Screened and cleared by hospital staff." });
+      donationId = response.body.data?.donation?.donationId;
+      if (donationId) {
+        artifactTracker.trackNotification({
+          userId: donorUser.userId,
+          type: "DONATION_COMPLETED",
+        });
+        artifactTracker.trackEmail({
+          recipientEmail: donorUser.email,
+          template: "DONATION_COMPLETED",
+        });
+        artifactTracker.trackSms({
+          recipientPhone: {
+            in: [donorUser.phone, normalizeKenyanPhoneNumber(donorUser.phone)].filter(Boolean),
+          },
+        });
+        artifactTracker.trackAudit({
+          entityType: "DonationRecord",
+          entityId: String(donationId),
+        });
+        await artifactTracker.capture();
+      }
       expect(response.status).toBe(201);
-      donationId = response.body.data.donation.donationId;
       expect(response.body.data.donation).toEqual(expect.objectContaining({
         status: "AVAILABLE",
         quantity: 450,

@@ -9,7 +9,7 @@ try {
   const jestPath = path.resolve(__dirname, "..", "node_modules", "jest", "bin", "jest.js");
   const result = spawnSync(
     process.execPath,
-    [jestPath, "--runInBand", "server/tests"],
+    [jestPath, "--runInBand", ...(process.argv.slice(2).length ? process.argv.slice(2) : ["server/tests"])],
     {
       cwd: path.resolve(__dirname, ".."),
       env: { ...process.env, DOTENV_CONFIG_QUIET: "true" },

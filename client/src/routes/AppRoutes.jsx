@@ -112,6 +112,24 @@ function AppRoutes() {
       />
 
       <Route
+        path="/knbts/questionnaire"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/knbts/questionnaire/:submissionId"
+        element={
+          <ProtectedRoute requiredRole="KNBTS_STAFF">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/hospital/inventory"
         element={
           <ProtectedRoute requiredRole="HOSPITAL_STAFF">
@@ -217,6 +235,24 @@ function AppRoutes() {
 
       <Route
         path="/donor/alerts"
+        element={
+          <ProtectedRoute requiredRole="DONOR">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/donor/questionnaire"
+        element={
+          <ProtectedRoute requiredRole="DONOR">
+            <App />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/donor/questionnaire/history"
         element={
           <ProtectedRoute requiredRole="DONOR">
             <App />

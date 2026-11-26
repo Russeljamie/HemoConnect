@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 describe("donor questionnaire submission and answer APIs", () => {
   let donorUser;
@@ -17,6 +18,7 @@ describe("donor questionnaire submission and answer APIs", () => {
   let extraVersionId;
   let extraQuestionId;
   let otherSubmissionId;
+  const artifactTracker = createTestArtifactTracker(prisma);
 
   const questionDefinitions = [
     { key: "health_1_1", number: "1.1", prompt: "Are you feeling well and in good health today?", type: "YES_NO" },
@@ -64,7 +66,14 @@ describe("donor questionnaire submission and answer APIs", () => {
     let call = request(app).post("/api/donor/questionnaire/submissions").set("Authorization", `Bearer ${token}`);
     if (body !== undefined) call = call.send(body);
     const response = await call;
-    if (response.status === 201) submissionIds.push(response.body.data.submission.submissionId);
+    if (response.status === 201) {
+      const { submissionId } = response.body.data.submission;
+      submissionIds.push(submissionId);
+      artifactTracker.trackAudit({
+        entityType: "DonorQuestionnaireSubmission",
+        entityId: String(submissionId),
+      });
+    }
     return response;
   };
 
@@ -156,14 +165,21 @@ describe("donor questionnaire submission and answer APIs", () => {
     }
   });
 
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+    artifactTracker.trackNotification({
+      userId: donorUser.userId,
+      type: "QUESTIONNAIRE_SUBMITTED",
+    });
+    artifactTracker.trackEmail({
+      recipientEmail: donorUser.email,
+      template: "QUESTIONNAIRE_SUBMITTED",
+    });
+  });
+
   afterEach(async () => {
+    await artifactTracker.cleanup();
     if (submissionIds.length) {
-      await prisma.notification.deleteMany({
-        where: { userId: donorUser.userId, type: "QUESTIONNAIRE_SUBMITTED" },
-      });
-      await prisma.emailOutbox.deleteMany({
-        where: { recipientEmail: donorUser.email, template: "QUESTIONNAIRE_SUBMITTED" },
-      });
       await prisma.questionnaireAnswer.deleteMany({ where: { submissionId: { in: submissionIds } } });
       await prisma.questionnaireReview.deleteMany({ where: { submissionId: { in: submissionIds } } });
       await prisma.questionnaireClinicalAssessment.deleteMany({ where: { submissionId: { in: submissionIds } } });
@@ -186,17 +202,21 @@ describe("donor questionnaire submission and answer APIs", () => {
   });
 
   afterAll(async () => {
-    if (submissionIds.length) {
-      await prisma.questionnaireAnswer.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireReview.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireClinicalAssessment.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.questionnaireApproval.deleteMany({ where: { submissionId: { in: submissionIds } } });
-      await prisma.donorQuestionnaireSubmission.deleteMany({ where: { submissionId: { in: submissionIds } } });
+    try {
+      await artifactTracker.cleanup();
+    } finally {
+      if (submissionIds.length) {
+        await prisma.questionnaireAnswer.deleteMany({ where: { submissionId: { in: submissionIds } } });
+        await prisma.questionnaireReview.deleteMany({ where: { submissionId: { in: submissionIds } } });
+        await prisma.questionnaireClinicalAssessment.deleteMany({ where: { submissionId: { in: submissionIds } } });
+        await prisma.questionnaireApproval.deleteMany({ where: { submissionId: { in: submissionIds } } });
+        await prisma.donorQuestionnaireSubmission.deleteMany({ where: { submissionId: { in: submissionIds } } });
+      }
+      await prisma.questionnaireOption.deleteMany({ where: { questionId: { in: Object.values(questionIds) } } });
+      await prisma.questionnaireQuestion.deleteMany({ where: { versionId: version.questionnaireVersionId } });
+      await prisma.questionnaireVersion.delete({ where: { questionnaireVersionId: version.questionnaireVersionId } });
+      await prisma.$disconnect();
     }
-    await prisma.questionnaireOption.deleteMany({ where: { questionId: { in: Object.values(questionIds) } } });
-    await prisma.questionnaireQuestion.deleteMany({ where: { versionId: version.questionnaireVersionId } });
-    await prisma.questionnaireVersion.delete({ where: { questionnaireVersionId: version.questionnaireVersionId } });
-    await prisma.$disconnect();
   });
 
   it("retrieves only the published questionnaire with wording, order, options, and parent links", async () => {
@@ -441,6 +461,9 @@ describe("donor questionnaire submission and answer APIs", () => {
     expect(await prisma.emailOutbox.count({
       where: { recipientEmail: donorUser.email, template: "QUESTIONNAIRE_SUBMITTED" },
     })).toBe(1);
+    expect(await prisma.smsOutbox.count({
+      where: { eventKey: `questionnaire-${draft.body.data.submission.submissionId}-submitted:sms` },
+    })).toBe(0);
 
     const edit = await saveAnswers(draft.body.data.submission.submissionId, [
       { questionId: questionIds.health_1_1, booleanValue: true },

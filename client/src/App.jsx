@@ -44,6 +44,12 @@ import {
   DonorAppointmentsPage,
   DonorAlertsPage,
 } from "./pages/DonorPages";
+import { DonorQuestionnairePage } from "./pages/QuestionnairePages";
+import {
+  KnbtsDashboardPage,
+  KnbtsQuestionnaireQueuePage,
+  KnbtsQuestionnaireReviewPage,
+} from "./pages/KnbtsQuestionnairePages";
 import "./App.css";
 import "./donor-shell.css";
 
@@ -55,6 +61,8 @@ const roleConfig = {
     nav: [
       { label: "Dashboard", icon: LayoutDashboard },
       { label: "My Profile", icon: UserRound },
+      { label: "Questionnaire", icon: ClipboardList },
+      { label: "Questionnaire History", icon: ClipboardList },
       { label: "Donation History", icon: Droplet },
       { label: "Appointments", icon: CalendarDays },
       { label: "Emergency Alerts", icon: HeartPulse },
@@ -116,10 +124,14 @@ const roleConfig = {
     bloodBadge: "Inventory",
   },
   KNBTS_STAFF: {
-    title: "KNBTS Centre",
-    subtitle: "Blood collection centre account.",
+    title: "KNBTS Staff Dashboard",
+    subtitle: "Questionnaire review overview.",
     welcome: "Welcome",
-    nav: [{ label: "Dashboard", icon: LayoutDashboard }],
+    nav: [
+      { label: "Dashboard", icon: LayoutDashboard },
+      { label: "Questionnaire Queue", icon: ClipboardList },
+      { label: "Notifications", icon: Bell },
+    ],
     stats: [],
   },
   ADMIN: {
@@ -187,8 +199,14 @@ function App() {
   const isHospitalAppointmentsPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/appointments";
   const isHospitalStaffPage = role === "HOSPITAL_STAFF" && location.pathname === "/hospital/staff";
   const isNotificationPage = location.pathname === "/notifications";
+  const isKnbtsQuestionnairePage = role === "KNBTS_STAFF" && (
+    location.pathname === "/knbts/questionnaire" ||
+    location.pathname.startsWith("/knbts/questionnaire/")
+  );
   const donorPage = {
     "/donor/profile": { label: "My Profile", subtitle: "Manage your donor details." },
+    "/donor/questionnaire": { label: "Questionnaire", subtitle: "Complete the HemoConnect health questionnaire." },
+    "/donor/questionnaire/history": { label: "Questionnaire History", subtitle: "Review submission status and KNBTS decisions." },
     "/donor/donations": { label: "Donation History", subtitle: "Review your recorded donations." },
     "/donor/appointments": { label: "Appointments", subtitle: "Manage your donation visits." },
     "/donor/alerts": { label: "Emergency Alerts", subtitle: "Find requests that match your blood type." },
@@ -274,6 +292,28 @@ function App() {
         });
     }
   }, [role, donorDashboardRefresh]);
+
+  useEffect(() => {
+    if (role !== "DONOR" || location.pathname !== "/dashboard") return undefined;
+    let cancelled = false;
+    const refreshAlerts = () => {
+      donorAPI.getAlerts()
+        .then((response) => {
+          if (!cancelled) setDonorAlerts(response?.data?.alerts || []);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            const detail = error.response?.data?.message || error.message;
+            setDonorDashboardError(`Emergency alerts${detail ? `: ${detail}` : " could not be loaded."}`);
+          }
+        });
+    };
+    const intervalId = window.setInterval(refreshAlerts, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [role, location.pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -427,7 +467,9 @@ function App() {
     ? "Users"
     : isAdminHospitalsPage
       ? "Institutions"
-    : isAdminInventoryPage ? "Inventory" : "Dashboard");
+    : isAdminInventoryPage ? "Inventory"
+      : isKnbtsQuestionnairePage ? "Questionnaire Queue"
+        : isNotificationPage ? "Notifications" : "Dashboard");
 
   function handleLogout() {
     logout();
@@ -450,6 +492,8 @@ function App() {
       const donorRoutes = {
         Dashboard: "/dashboard",
         "My Profile": "/donor/profile",
+        Questionnaire: "/donor/questionnaire",
+        "Questionnaire History": "/donor/questionnaire/history",
         "Donation History": "/donor/donations",
         Appointments: "/donor/appointments",
         "Emergency Alerts": "/donor/alerts",
@@ -466,6 +510,18 @@ function App() {
       setMessage("");
       const hospitalRoutes = { Inventory: "/hospital/inventory", Requests: "/hospital/requests" };
       navigate(hospitalRoutes[label]);
+      return;
+    }
+
+    if (role === "KNBTS_STAFF" && label === "Questionnaire Queue") {
+      setMessage("");
+      navigate("/knbts/questionnaire");
+      return;
+    }
+
+    if (role === "KNBTS_STAFF" && label === "Notifications") {
+      setMessage("");
+      navigate("/notifications");
       return;
     }
 
@@ -521,6 +577,8 @@ function App() {
 
   const donorPageContent = {
     "/donor/profile": <DonorProfilePage onProfileUpdated={handleDonorProfileUpdated} />,
+    "/donor/questionnaire": <DonorQuestionnairePage />,
+    "/donor/questionnaire/history": <DonorQuestionnairePage historyOnly />,
     "/donor/donations": <DonorDonationsPage />,
     "/donor/appointments": <DonorAppointmentsPage />,
     "/donor/alerts": <DonorAlertsPage />,
@@ -723,7 +781,11 @@ function App() {
                             ? "User Accounts"
                             : isAdminHospitalsPage
                               ? "Institution Directory"
-                              : isAdminInventoryPage ? "Blood Inventory" : effectiveRole.title)}
+                              : isAdminInventoryPage
+                                ? "Blood Inventory"
+                                : isKnbtsQuestionnairePage
+                                  ? "KNBTS Questionnaire Review"
+                                  : effectiveRole.title)}
               </div>
               <div className="page-subtitle">
                 {isNotificationPage
@@ -740,7 +802,11 @@ function App() {
                             ? "Manage platform account access."
                             : isAdminHospitalsPage
                               ? "Review hospitals and KNBTS centre access."
-                              : isAdminInventoryPage ? "Monitor stock levels across the hospital network." : effectiveRole.subtitle)}
+                              : isAdminInventoryPage
+                                ? "Monitor stock levels across the hospital network."
+                                : isKnbtsQuestionnairePage
+                                  ? "Inspect submissions, assessments and approvals."
+                                  : effectiveRole.subtitle)}
               </div>
             </div>
           </div>
@@ -830,19 +896,17 @@ function App() {
             </div>
           )}
 
-          {role === "KNBTS_STAFF" ? (
+          {role === "KNBTS_STAFF" && isKnbtsQuestionnairePage ? (
+            location.pathname.startsWith("/knbts/questionnaire/")
+              ? <KnbtsQuestionnaireReviewPage />
+              : <KnbtsQuestionnaireQueuePage />
+          ) : role === "KNBTS_STAFF" && isNotificationPage ? (
+            <NotificationsPage onUnreadCountChange={setUnreadNotificationCount} />
+          ) : role === "KNBTS_STAFF" ? (
             knbtsProfileLoading ? (
               <div className="donor-page-state" role="status">Loading centre profile...</div>
             ) : (
-              <section className="dashboard-card knbts-landing-card" aria-labelledby="knbts-centre-heading">
-                <h1 id="knbts-centre-heading">{knbtsProfile?.centre?.name || "KNBTS Centre"}</h1>
-                <p className="knbts-landing-designation">{knbtsProfile?.designation || "KNBTS staff"}</p>
-                <p>More centre features are coming soon.</p>
-                <button type="button" className="primary-button" onClick={handleLogout}>
-                  <LogOut size={18} />
-                  Logout
-                </button>
-              </section>
+              <KnbtsDashboardPage profile={knbtsProfile} />
             )
           ) : role === "DONOR" && !donorPage && donorDashboardLoading ? (
             <div className="donor-page-state" role="status">Loading your dashboard...</div>

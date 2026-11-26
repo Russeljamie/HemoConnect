@@ -1,11 +1,17 @@
 const prisma = require("../services/prisma");
 const { processEmergencyRequest } = require("../services/donorMatching");
 const { recordRequestEvent } = require("../services/requestEvents");
-const { latestDate } = require("../utils/donationEligibility");
+const env = require("../config/env");
+const { getDonationEligibility, latestDate } = require("../utils/donationEligibility");
 const {
   cancelAppointmentWithApproval,
   consumeApprovalForCompletedDonation,
 } = require("../services/approvalBookingService");
+const {
+  appointmentAcceptanceMessage,
+  enqueueApprovedSms,
+  formatAppointmentDate,
+} = require("../services/notificationDelivery");
 const {
   notifyUser,
   queueHospitalInventoryAlert,
@@ -869,7 +875,15 @@ const updateHospitalAppointment = async (req, res, next) => {
       }
       const current = await tx.appointment.findFirst({
         where: { appointmentId, hospitalId: staff.hospitalId, status: appointment.status },
-        select: { appointmentId: true, slotId: true },
+        select: {
+          appointmentId: true,
+          slotId: true,
+          purpose: true,
+          date: true,
+          time: true,
+          donor: { select: { user: { select: { phone: true } } } },
+          hospital: { select: { name: true } },
+        },
       });
       if (!current) return 0;
       const updated = await tx.appointment.updateMany({
@@ -880,6 +894,20 @@ const updateHospitalAppointment = async (req, res, next) => {
         await tx.appointmentSlot.updateMany({
           where: { slotId: current.slotId, bookedCount: { gt: 0 } },
           data: { bookedCount: { decrement: 1 } },
+        });
+      }
+      if (updated.count &&
+          nextStatus === "CONFIRMED" &&
+          current.purpose.toLowerCase() === "blood donation") {
+        await enqueueApprovedSms(tx, {
+          eventType: "APPOINTMENT_ACCEPTED",
+          recipientPhone: current.donor?.user?.phone,
+          eventKey: `appointment-${appointmentId}-accepted`,
+          message: appointmentAcceptanceMessage({
+            hospital: current.hospital?.name,
+            date: current.date,
+            time: current.time,
+          }),
         });
       }
       return updated.count;
@@ -968,6 +996,12 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
           hospitalId: staff.hospitalId,
         },
       });
+      const eligibility = getDonationEligibility({
+        lastSuccessfulDonationDate: donation.donationDate,
+      });
+      if (!eligibility.nextEligibleDonationDate) {
+        throw new Error("Could not calculate the donor's next eligible donation date.");
+      }
       await tx.donor.update({
         where: { donorId: appointment.donorId },
         data: {
@@ -992,6 +1026,7 @@ const recordHospitalAppointmentDonation = async (req, res, next) => {
           date: donation.donationDate,
           hospital: appointment.hospital?.name || "the hospital",
         },
+        smsMessage: `Thank you for donating blood with HemoConnect! Your donation was successfully recorded on ${formatAppointmentDate(donation.donationDate)}. You must wait ${env.DONATION_WAITING_PERIOD_DAYS} days from your donation date before becoming eligible to donate again. Your next eligible donation date is ${formatAppointmentDate(eligibility.nextEligibleDonationDate)}. Your generosity saves lives!`,
       });
       await tx.auditLog.create({
         data: {

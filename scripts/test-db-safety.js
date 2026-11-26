@@ -59,6 +59,15 @@ function validateTestDatabaseUrls(testDatabaseUrl, developmentDatabaseUrl) {
   return testDatabase;
 }
 
+function assertTestDatabaseIdentity(databaseName) {
+  if (databaseName !== requiredDatabaseName) {
+    throw new Error(
+      `Refusing to continue: connected database "${databaseName || "unknown"}" must be "${requiredDatabaseName}".`
+    );
+  }
+  return databaseName;
+}
+
 function assertSeedDatabaseAllowed() {
   const { databaseName } = parseDatabaseUrl(process.env.DATABASE_URL, "Seed");
   if (databaseName === requiredDatabaseName || process.env.HEMOCONNECT_ALLOW_DEV_SEED === "yes") {
@@ -109,10 +118,15 @@ function loadTestDatabase(options = {}) {
 async function verifyTestDatabaseExists({ databaseName, host }) {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   let connected = false;
+  let transactionStarted = false;
 
   try {
     await client.connect();
     connected = true;
+    await client.query("BEGIN TRANSACTION READ ONLY");
+    transactionStarted = true;
+    const result = await client.query("SELECT current_database() AS database_name");
+    assertTestDatabaseIdentity(result.rows[0]?.database_name);
   } catch (error) {
     if (error && error.code === "3D000") {
       throw new Error(
@@ -121,23 +135,36 @@ async function verifyTestDatabaseExists({ databaseName, host }) {
     }
 
     throw new Error(
-      `Cannot connect to test database "${databaseName}" on host "${host}"; connection details were suppressed.`
+      error && error.message && error.message.startsWith("Refusing to continue:")
+        ? error.message
+        : `Cannot verify test database "${databaseName}" on host "${host}"; connection details were suppressed.`
     );
   } finally {
-    if (connected) await client.end();
+    if (connected) {
+      if (transactionStarted) await client.query("ROLLBACK");
+      await client.end();
+    }
   }
 }
 
 if (require.main === module) {
-  try {
-    const { databaseName } = loadTestDatabase();
-    if (process.argv.includes("--print-database")) {
-      console.log(databaseName);
+  (async () => {
+    try {
+      const testDatabase = loadTestDatabase();
+      const { databaseName } = testDatabase;
+      if (process.argv.includes("--verify-identity")) {
+        await verifyTestDatabaseExists(testDatabase);
+        console.log(`Verified database identity: ${databaseName}.`);
+        return;
+      }
+      if (process.argv.includes("--print-database")) {
+        console.log(databaseName);
+      }
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
     }
-  } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
-  }
+  })();
 }
 
 module.exports = {
@@ -146,5 +173,6 @@ module.exports = {
   readDevelopmentDatabaseUrl,
   assertSeedDatabaseAllowed,
   validateTestDatabaseUrls,
+  assertTestDatabaseIdentity,
   verifyTestDatabaseExists,
 };

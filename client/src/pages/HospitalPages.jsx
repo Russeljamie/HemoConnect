@@ -306,6 +306,7 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
       .then((requestsResponse) => {
         if (cancelled) return;
         setRequests(requestsResponse.data.requests || []);
+        setError("");
       })
       .catch((requestError) => {
         if (!cancelled) setError(getErrorMessage(requestError, "Unable to load incoming requests."));
@@ -315,6 +316,13 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
       });
     return () => { cancelled = true; };
   }, [refreshKey]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRefreshKey((current) => current + 1);
+    }, 30000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   function refreshData(message) {
     if (message) setNotice(message);
@@ -346,7 +354,15 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
         latitude: "", longitude: "", notes: "",
         patientReference: "",
       });
-      refreshData(response.message || "Official request created.");
+      const matching = response.data?.matching;
+      const matchingNotice = matching?.pending
+        ? "Request created. Donor matching will retry shortly."
+        : matching && matching.alertedDonors === 0
+          ? "Request created. No eligible donors matched in the first location wave; matching will continue."
+          : matching
+            ? `Request created. ${matching.alertedDonors} eligible donor${matching.alertedDonors === 1 ? "" : "s"} notified.`
+            : response.message || "Official request created.";
+      refreshData(matchingNotice);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "Unable to create the official request."));
     } finally {
@@ -408,7 +424,7 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
         <label>Request latitude <span className="hospital-form-optional">Uses hospital location if blank</span><input type="number" step="any" min="-90" max="90" value={requestForm.latitude} onChange={(event) => setRequestForm({ ...requestForm, latitude: event.target.value })} /></label>
         <label>Request longitude <span className="hospital-form-optional">Uses hospital location if blank</span><input type="number" step="any" min="-180" max="180" value={requestForm.longitude} onChange={(event) => setRequestForm({ ...requestForm, longitude: event.target.value })} /></label>
         <label className="hospital-form-wide">Patient or case reference <span className="hospital-form-optional">Ward or case reference only. Do not enter names or phone numbers.</span><input maxLength="60" value={requestForm.patientReference} onChange={(event) => setRequestForm({ ...requestForm, patientReference: event.target.value })} /></label>
-        <label className="hospital-form-wide">Notes<input maxLength="500" value={requestForm.notes} onChange={(event) => setRequestForm({ ...requestForm, notes: event.target.value })} /></label>
+        <label className="hospital-form-wide">Request details <span className="hospital-form-optional">Operational details only; do not enter patient names or phone numbers.</span><input maxLength="500" value={requestForm.notes} onChange={(event) => setRequestForm({ ...requestForm, notes: event.target.value })} /></label>
         <button className="primary-button" type="submit" disabled={saving}>{saving ? "Creating..." : "Create request and notify matched donors"}</button>
       </form>
 
@@ -417,13 +433,17 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
         <div className="donor-requests-list-heading"><h2>Request history</h2><span>{requests.length} requests</span></div>
       <div className="donor-table-wrap">
         <table className="donor-table hospital-requests-table">
-          <thead><tr><th>Blood type</th><th>Units / fulfilled</th><th>Urgency</th><th>Needed by</th><th>Reference</th><th>Hospital</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Blood type</th><th>Units / fulfilled</th><th>Urgency</th><th>Needed by</th><th>Reference</th><th>Hospital</th><th>Status</th><th>Donor responses</th><th>Actions</th></tr></thead>
           <tbody>
-            {loading ? <tr><td colSpan="8" className="donor-table-empty">Loading requests...</td></tr>
-              : requests.length === 0 ? <tr><td colSpan="8" className="donor-table-empty">No hospital requests.</td></tr>
+            {loading ? <tr><td colSpan="9" className="donor-table-empty">Loading requests...</td></tr>
+              : requests.length === 0 ? <tr><td colSpan="9" className="donor-table-empty">No hospital requests.</td></tr>
                 : requests.map((request) => {
                   const isAssigned = request.status === "IN_PROGRESS" && request.hospital;
                   const canFulfill = request.hospital && ["OPEN", "IN_PROGRESS", "PARTIALLY_FULFILLED"].includes(request.status);
+                  const donorMatches = request.matches || [];
+                  const acceptedCount = donorMatches.filter((match) => match.status === "ACCEPTED").length;
+                  const declinedCount = donorMatches.filter((match) => match.status === "DECLINED").length;
+                  const awaitingCount = donorMatches.filter((match) => match.status === "NOTIFIED").length;
                   return (
                     <tr key={request.requestId}>
                       <td><strong className="donor-blood-type">{request.bloodType}</strong></td>
@@ -433,6 +453,11 @@ export function HospitalRequestsPage({ onRequestUpdated }) {
                       <td>{request.patientReference || "—"}</td>
                       <td>{request.hospital?.name || "Open queue"}</td>
                       <td><span className="donor-status-tag">{request.status}</span></td>
+                      <td aria-label={`${acceptedCount} accepted, ${declinedCount} declined, ${awaitingCount} awaiting response`}>
+                        {donorMatches.length
+                          ? `${acceptedCount} accepted · ${declinedCount} declined · ${awaitingCount} awaiting`
+                          : "No matched donors"}
+                      </td>
                       <td>
                         {canFulfill && <div className="hospital-fulfillment-control">
                           <input aria-label={`Fulfillment units for request ${request.requestId}`} type="number" min="1" max={request.quantityRequired - (request.fulfilledQuantity || 0)} value={fulfillmentQuantities[request.requestId] ?? Math.max(1, request.quantityRequired - (request.fulfilledQuantity || 0))} onChange={(event) => setFulfillmentQuantities({ ...fulfillmentQuantities, [request.requestId]: event.target.value })} />

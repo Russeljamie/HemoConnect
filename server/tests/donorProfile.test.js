@@ -5,6 +5,9 @@ const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
 const { getNairobiDateParts } = require("../utils/nairobiDate");
+const { normalizeKenyanPhoneNumber } = require("../services/sms");
+const { createQuestionnaireFixtureCleanup } = require("./helpers/questionnaireFixtureCleanup");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
 
 const getExact18BirthDate = () => {
   const today = getNairobiDateParts(new Date());
@@ -20,17 +23,12 @@ const getDatabaseExact18BirthDate = async () => {
 describe("Donor profile API", () => {
   let donorToken;
   let donorUser;
-  let approvalFixture;
-  let approvalFixtureSubmission;
-  let approvalFixtureReview;
-  let approvalFixtureVersion;
+  const questionnaireFixtureCleanups = new Set();
+  const artifactTracker = createTestArtifactTracker(prisma);
 
   const ensureActiveApproval = async (donor) => {
-    await prisma.questionnaireBookingAssociation.deleteMany({
-      where: { approval: { donorId: donor.donorId } },
-    });
-    await prisma.questionnaireApproval.deleteMany({ where: { donorId: donor.donorId } });
-
+    const fixtureCleanup = createQuestionnaireFixtureCleanup(prisma);
+    questionnaireFixtureCleanups.add(fixtureCleanup);
     const nowRows = await prisma.$queryRaw`SELECT NOW() AS "databaseNow"`;
     const now = nowRows[0].databaseNow instanceof Date
       ? nowRows[0].databaseNow
@@ -43,6 +41,7 @@ describe("Donor profile API", () => {
         publishedAt: now,
       },
     });
+    fixtureCleanup.trackVersion(version);
     const submission = await prisma.donorQuestionnaireSubmission.create({
       data: {
         donorId: donor.donorId,
@@ -52,6 +51,7 @@ describe("Donor profile API", () => {
         declarationAcknowledgedAt: now,
       },
     });
+    fixtureCleanup.trackSubmission(submission);
     const review = await prisma.questionnaireReview.create({
       data: {
         submissionId: submission.submissionId,
@@ -60,7 +60,7 @@ describe("Donor profile API", () => {
         reviewedAt: now,
       },
     });
-    await prisma.questionnaireClinicalAssessment.create({
+    const assessment = await prisma.questionnaireClinicalAssessment.create({
       data: {
         submissionId: submission.submissionId,
         donorId: donor.donorId,
@@ -82,7 +82,7 @@ describe("Donor profile API", () => {
         status: "ACTIVE",
       },
     });
-    return { approval, submission, review, version };
+    return { approval, submission, review, assessment, version, fixtureCleanup };
   };
 
   beforeAll(async () => {
@@ -92,10 +92,6 @@ describe("Donor profile API", () => {
     });
 
     const fixture = await ensureActiveApproval(donorUser.donor);
-    approvalFixture = fixture.approval;
-    approvalFixtureSubmission = fixture.submission;
-    approvalFixtureReview = fixture.review;
-    approvalFixtureVersion = fixture.version;
 
     donorToken = jwt.sign(
       { userId: donorUser.userId, role: donorUser.role },
@@ -105,24 +101,25 @@ describe("Donor profile API", () => {
   });
 
   afterAll(async () => {
-    await prisma.questionnaireBookingAssociation.deleteMany({
-      where: { approvalId: approvalFixture?.approvalId },
+    for (const fixtureCleanup of questionnaireFixtureCleanups) {
+      await fixtureCleanup.cleanup({ deleteVersions: true });
+    }
+  });
+
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+    artifactTracker.trackNotification({ userId: donorUser.userId });
+    artifactTracker.trackEmail({ recipientEmail: donorUser.email });
+    artifactTracker.trackSms({
+      recipientPhone: {
+        in: [donorUser.phone, normalizeKenyanPhoneNumber(donorUser.phone)].filter(Boolean),
+      },
     });
-    await prisma.questionnaireApproval.deleteMany({
-      where: { donorId: donorUser.donor.donorId },
-    });
-    await prisma.questionnaireClinicalAssessment.deleteMany({
-      where: { submissionId: approvalFixtureSubmission?.submissionId },
-    });
-    await prisma.questionnaireReview.deleteMany({
-      where: { submissionId: approvalFixtureSubmission?.submissionId },
-    });
-    await prisma.donorQuestionnaireSubmission.deleteMany({
-      where: { submissionId: approvalFixtureSubmission?.submissionId },
-    });
-    await prisma.questionnaireVersion.deleteMany({
-      where: { questionnaireVersionId: approvalFixtureVersion?.questionnaireVersionId },
-    });
+    artifactTracker.trackAudit({ actorUserId: donorUser.userId });
+  });
+
+  afterEach(async () => {
+    await artifactTracker.cleanup();
   });
 
   it("returns a donor summary and donation history for the authenticated donor", async () => {
@@ -575,6 +572,14 @@ describe("Donor profile API", () => {
           status: "ACTIVE",
         },
       });
+      artifactTracker.trackNotification({ userId: isolatedUser.userId });
+      artifactTracker.trackEmail({ recipientEmail: isolatedUser.email });
+      artifactTracker.trackSms({
+        recipientPhone: {
+          in: [isolatedUser.phone, normalizeKenyanPhoneNumber(isolatedUser.phone)].filter(Boolean),
+        },
+      });
+      artifactTracker.trackAudit({ actorUserId: isolatedUser.userId });
       isolatedDonor = await prisma.donor.create({
         data: {
           firstName: "No",
@@ -643,30 +648,14 @@ describe("Donor profile API", () => {
       appointmentId = response.body.data.appointment.appointmentId;
     } finally {
       if (isolatedApprovalFixture) {
-        await prisma.questionnaireBookingAssociation.deleteMany({
-          where: { approvalId: isolatedApprovalFixture.approval.approvalId },
-        });
+        await isolatedApprovalFixture.fixtureCleanup.cleanup({ deleteVersions: true });
       }
       if (appointmentId) await prisma.appointment.delete({ where: { appointmentId } });
-      if (isolatedApprovalFixture) {
-        await prisma.questionnaireApproval.deleteMany({
-          where: { approvalId: isolatedApprovalFixture.approval.approvalId },
-        });
-        await prisma.questionnaireClinicalAssessment.deleteMany({
-          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
-        });
-        await prisma.questionnaireReview.deleteMany({
-          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
-        });
-        await prisma.donorQuestionnaireSubmission.deleteMany({
-          where: { submissionId: isolatedApprovalFixture.submission.submissionId },
-        });
-        await prisma.questionnaireVersion.deleteMany({
-          where: { questionnaireVersionId: isolatedApprovalFixture.version.questionnaireVersionId },
-        });
-      }
       if (slot) await prisma.appointmentSlot.delete({ where: { slotId: slot.slotId } });
-      if (isolatedUser) await prisma.user.delete({ where: { userId: isolatedUser.userId } });
+      if (isolatedUser) {
+        await artifactTracker.capture();
+        await prisma.user.delete({ where: { userId: isolatedUser.userId } });
+      }
     }
   });
 
@@ -778,6 +767,11 @@ describe("Donor profile API", () => {
 
   it("keeps donor registration and login working", async () => {
     const email = `donor-test-${Date.now()}@hemoconnect.co.ke`;
+    artifactTracker.trackEmail({ recipientEmail: email });
+    artifactTracker.trackSms({ recipientPhone: "+254790000002" });
+    artifactTracker.trackSms({ recipientPhone: "+254790000003" });
+    artifactTracker.trackSms({ recipientPhone: "+254790000001" });
+    let registeredUserId;
     const exact18BirthDate = getExact18BirthDate();
 
     const exact18Registration = await request(app).post("/api/auth/register").send({
@@ -793,6 +787,26 @@ describe("Donor profile API", () => {
       address: "Nairobi",
     });
     expect(exact18Registration.status).toBe(400);
+    expect(await prisma.smsOutbox.count({
+      where: { recipientPhone: "+254790000002" },
+    })).toBe(0);
+
+    const failedRegistration = await request(app).post("/api/auth/register").send({
+      firstName: "Duplicate",
+      lastName: "Donor",
+      email: donorUser.email,
+      phone: "0790000003",
+      password: "Password123!",
+      role: "DONOR",
+      bloodType: "O+",
+      birthDate: "1996-05-10",
+      gender: "OTHER",
+      address: "Nairobi",
+    });
+    expect(failedRegistration.status).toBe(409);
+    expect(await prisma.smsOutbox.count({
+      where: { recipientPhone: "+254790000003" },
+    })).toBe(0);
 
     const userData = {
       firstName: "Test",
@@ -810,6 +824,30 @@ describe("Donor profile API", () => {
     try {
       const registration = await request(app).post("/api/auth/register").send(userData);
       expect(registration.status).toBe(201);
+      registeredUserId = registration.body.data.userId;
+      artifactTracker.trackNotification({ userId: registeredUserId });
+      artifactTracker.trackSms({
+        eventKey: `account-${registeredUserId}-registered:sms`,
+      });
+      artifactTracker.trackAudit({
+        entityType: "User",
+        entityId: String(registeredUserId),
+      });
+      const welcomeSms = await prisma.smsOutbox.findUnique({
+        where: { eventKey: `account-${registeredUserId}-registered:sms` },
+      });
+      expect(welcomeSms).toEqual(expect.objectContaining({
+        recipientPhone: "+254790000001",
+        status: "QUEUED",
+      }));
+      expect(welcomeSms.message).toContain("successfully created");
+      expect(welcomeSms.message).toContain("Log in");
+      expect(await prisma.notification.count({
+        where: { userId: registeredUserId, type: "ACCOUNT_REGISTERED" },
+      })).toBe(1);
+      expect(await prisma.emailOutbox.count({
+        where: { recipientEmail: email, template: "WELCOME" },
+      })).toBe(1);
 
       const login = await request(app)
         .post("/api/auth/login")
@@ -818,6 +856,21 @@ describe("Donor profile API", () => {
       expect(login.body.data.token).toEqual(expect.any(String));
       expect(login.body.data.user.role).toBe("DONOR");
     } finally {
+      if (!registeredUserId) {
+        const registeredUser = await prisma.user.findUnique({
+          where: { email },
+          select: { userId: true },
+        });
+        registeredUserId = registeredUser?.userId;
+        if (registeredUserId) {
+          artifactTracker.trackNotification({ userId: registeredUserId });
+          artifactTracker.trackAudit({
+            entityType: "User",
+            entityId: String(registeredUserId),
+          });
+        }
+      }
+      await artifactTracker.capture();
       await prisma.user.deleteMany({ where: { email } });
     }
   });

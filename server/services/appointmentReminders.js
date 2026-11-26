@@ -1,5 +1,4 @@
 const prisma = require("./prisma");
-const { enqueueSmsOnce } = require("./sms");
 const { appointmentNotificationDetails, createInAppNotification } = require("./notificationDelivery");
 
 const REMINDER_INTERVAL_MS = 15 * 60 * 1000;
@@ -41,13 +40,34 @@ const processAppointmentReminders = async (now = new Date(), options = {}) => {
     if (appointment.donor?.user?.status !== "ACTIVE") continue;
     const details = appointmentNotificationDetails(appointment);
     await prisma.$transaction(async (tx) => {
-      const { created } = await enqueueSmsOnce(
-        tx,
-        appointment.donor.user.phone,
-        details.reminderMessage,
-        `appointment-${appointment.appointmentId}-reminder:sms`
-      );
-      if (!created) return;
+      const locked = await tx.$queryRaw`
+        SELECT "appointmentId"
+        FROM "Appointment"
+        WHERE "appointmentId" = ${appointment.appointmentId}
+        FOR UPDATE
+      `;
+      if (!locked.length) return;
+
+      const current = await tx.appointment.findFirst({
+        where: {
+          appointmentId: appointment.appointmentId,
+          date: nextNairobiDate,
+          status: { in: ["SCHEDULED", "CONFIRMED"] },
+          donor: { user: { status: "ACTIVE" } },
+        },
+        select: { appointmentId: true },
+      });
+      if (!current) return;
+
+      const existing = await tx.notification.findFirst({
+        where: {
+          userId: appointment.donor.user.userId,
+          type: "APPOINTMENT_REMINDER",
+          message: details.reminderMessage,
+        },
+        select: { notificationId: true },
+      });
+      if (existing) return;
 
       await createInAppNotification(tx, {
         userId: appointment.donor.user.userId,

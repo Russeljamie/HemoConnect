@@ -6,14 +6,34 @@ const app = require("../app");
 const prisma = require("../services/prisma");
 const env = require("../config/env");
 const { renderEmailTemplate } = require("../services/email");
-const { normalizeKenyanPhoneNumber } = require("../services/sms");
+const { createTestArtifactTracker } = require("./helpers/testArtifactTracker");
+const { createEmergencyDonorFixtures } = require("./helpers/emergencyDonorFixtures");
 
 describe("Patient-independent hospital request refactor", () => {
   let staffUser;
   let staffProfile;
   let donorUser;
   let staffToken;
-  let donorToken;
+  const artifactTracker = createTestArtifactTracker(prisma);
+  const donorFixtures = createEmergencyDonorFixtures(prisma);
+
+  const trackRequestArtifacts = async (requestId) => {
+    const matches = await prisma.requestMatch.findMany({
+      where: { requestId },
+      include: { donor: { select: { user: { select: { email: true } } } } },
+    });
+    artifactTracker.trackNotification({ requestId });
+    artifactTracker.trackSms({ eventKey: { startsWith: `emergency-${requestId}-` } });
+    artifactTracker.trackEmail({
+      recipientEmail: { in: matches.map(({ donor }) => donor.user.email) },
+      template: "DONOR_EMERGENCY_ALERT",
+    });
+    artifactTracker.trackAudit({
+      entityType: "EmergencyRequest",
+      entityId: String(requestId),
+    });
+    await artifactTracker.capture();
+  };
 
   beforeAll(async () => {
     staffUser = await prisma.user.findUnique({ where: { email: "staff1@hemoconnect.co.ke" } });
@@ -28,11 +48,15 @@ describe("Patient-independent hospital request refactor", () => {
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
-    donorToken = jwt.sign(
-      { userId: donorUser.userId, role: donorUser.role },
-      env.JWT_SECRET,
-      { expiresIn: env.JWT_EXPIRES_IN }
-    );
+  });
+
+  beforeEach(async () => {
+    await artifactTracker.snapshotExisting();
+  });
+
+  afterEach(async () => {
+    await artifactTracker.cleanup();
+    await donorFixtures.cleanup();
   });
 
   it("rejects and trims patientReference with the required length boundary", async () => {
@@ -56,10 +80,16 @@ describe("Patient-independent hospital request refactor", () => {
       .set("Authorization", `Bearer ${staffToken}`)
       .send({ ...basePayload, patientReference: `  ${shortReference}  ` });
 
-    expect(created.status).toBe(201);
-    expect(created.body.data.request.patientReference).toBe(shortReference);
-
-    await prisma.emergencyRequest.delete({ where: { requestId: created.body.data.request.requestId } });
+    const requestId = created.body?.data?.request?.requestId;
+    try {
+      expect(created.status).toBe(201);
+      expect(created.body.data.request.patientReference).toBe(shortReference);
+    } finally {
+      if (requestId) {
+        await trackRequestArtifacts(requestId);
+        await prisma.emergencyRequest.delete({ where: { requestId } });
+      }
+    }
   });
 
   it("rejects patientId and patient detail payload fields", async () => {
@@ -122,6 +152,30 @@ describe("Patient-independent hospital request refactor", () => {
       where: { hospitalId_bloodType: { hospitalId: staffProfile.hospitalId, bloodType: "O+" } },
     });
     const originalUnits = inventory?.unitsAvailable ?? 0;
+    const donorFixture = await donorFixtures.createDonor({
+      label: "request-fulfillment",
+      bloodType: "O+",
+      latitude: hospital.latitude,
+      longitude: hospital.longitude,
+    });
+    const decliningDonorFixture = await donorFixtures.createDonor({
+      label: "request-decline",
+      bloodType: "O+",
+      latitude: hospital.latitude,
+      longitude: hospital.longitude,
+    });
+    await donorFixtures.createApproval(donorFixture.donor);
+    await donorFixtures.createApproval(decliningDonorFixture.donor);
+    const fixtureDonorToken = jwt.sign(
+      { userId: donorFixture.user.userId, role: donorFixture.user.role },
+      env.JWT_SECRET,
+      { expiresIn: env.JWT_EXPIRES_IN }
+    );
+    const decliningDonorToken = jwt.sign(
+      { userId: decliningDonorFixture.user.userId, role: decliningDonorFixture.user.role },
+      env.JWT_SECRET,
+      { expiresIn: env.JWT_EXPIRES_IN }
+    );
 
     if (inventory) {
       await prisma.bloodInventory.update({
@@ -149,8 +203,8 @@ describe("Patient-independent hospital request refactor", () => {
           patientReference: "WARD-REF-42",
         });
 
+      requestId = created.body?.data?.request?.requestId;
       expect(created.status).toBe(201);
-      requestId = created.body.data.request.requestId;
 
       const saved = await prisma.emergencyRequest.findUnique({ where: { requestId } });
       expect(saved.createdByStaffId).toBe(staffProfile.staffId);
@@ -168,7 +222,10 @@ describe("Patient-independent hospital request refactor", () => {
           },
         },
       });
-      expect(matches.length).toBeGreaterThan(0);
+      expect(matches.map(({ donorId }) => donorId)).toEqual(expect.arrayContaining([
+        donorFixture.donor.donorId,
+        decliningDonorFixture.donor.donorId,
+      ]));
       for (const matchedDonor of matches) {
         const [notification, sms, email] = await Promise.all([
           prisma.notification.findFirst({
@@ -183,18 +240,54 @@ describe("Patient-independent hospital request refactor", () => {
         ]);
         expect(notification).not.toBeNull();
         expect(email).not.toBeNull();
-        if (normalizeKenyanPhoneNumber(matchedDonor.donor.user.phone)) {
-          expect(sms.recipientPhone).toBe(normalizeKenyanPhoneNumber(matchedDonor.donor.user.phone));
-        } else {
-          expect(sms.status).toBe("FAILED");
-        }
+        expect(sms).toBeNull();
       }
 
+      const donorAlerts = await request(app)
+        .get("/api/donor/alerts")
+        .set("Authorization", `Bearer ${fixtureDonorToken}`);
+      expect(donorAlerts.status).toBe(200);
+      expect(donorAlerts.body.data.alerts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          requestId,
+          bloodType: "O+",
+          quantityRequired: 2,
+          hospital: expect.objectContaining({ name: expect.any(String) }),
+        }),
+      ]));
+      expect(donorAlerts.body.data.alerts[0]).not.toHaveProperty("patientReference");
+
+      const donationCountBeforeResponse = await prisma.donationRecord.count({
+        where: { donorId: donorFixture.donor.donorId },
+      });
       const accepted = await request(app)
         .post(`/api/donor/alerts/${requestId}/respond`)
-        .set("Authorization", `Bearer ${donorToken}`)
+        .set("Authorization", `Bearer ${fixtureDonorToken}`)
         .send({ response: "ACCEPT" });
       expect(accepted.status).toBe(200);
+      const duplicateResponse = await request(app)
+        .post(`/api/donor/alerts/${requestId}/respond`)
+        .set("Authorization", `Bearer ${fixtureDonorToken}`)
+        .send({ response: "ACCEPT" });
+      expect(duplicateResponse.status).toBe(409);
+      const declined = await request(app)
+        .post(`/api/donor/alerts/${requestId}/respond`)
+        .set("Authorization", `Bearer ${decliningDonorToken}`)
+        .send({ response: "DECLINE" });
+      expect(declined.status).toBe(200);
+      expect(await prisma.donationRecord.count({
+        where: { donorId: donorFixture.donor.donorId },
+      })).toBe(donationCountBeforeResponse);
+
+      const hospitalRequests = await request(app)
+        .get("/api/hospital/requests")
+        .set("Authorization", `Bearer ${staffToken}`);
+      expect(hospitalRequests.status).toBe(200);
+      expect(hospitalRequests.body.data.requests.find((item) => item.requestId === requestId).matches)
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ status: "ACCEPTED" }),
+          expect.objectContaining({ status: "DECLINED" }),
+        ]));
 
       const beforeFulfillment = await prisma.bloodInventory.findUnique({
         where: { hospitalId_bloodType: { hospitalId: staffProfile.hospitalId, bloodType: "O+" } },
@@ -212,17 +305,7 @@ describe("Patient-independent hospital request refactor", () => {
       expect(afterFulfillment.unitsAvailable).toBe(beforeFulfillment.unitsAvailable - 2);
     } finally {
       if (requestId) {
-        const matches = await prisma.requestMatch.findMany({
-          where: { requestId },
-          include: { donor: { select: { user: { select: { email: true } } } } },
-        });
-        await prisma.smsOutbox.deleteMany({ where: { eventKey: { startsWith: `emergency-${requestId}-` } } });
-        await prisma.emailOutbox.deleteMany({
-          where: {
-            recipientEmail: { in: matches.map(({ donor }) => donor.user.email) },
-            template: "DONOR_EMERGENCY_ALERT",
-          },
-        });
+        await trackRequestArtifacts(requestId);
         await prisma.emergencyRequest.delete({ where: { requestId } });
       }
       const restoredInventory = await prisma.bloodInventory.findUnique({

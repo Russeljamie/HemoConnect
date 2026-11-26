@@ -7,6 +7,8 @@ const {
   startOfNairobiDay,
 } = require("../utils/donationEligibility");
 const { getLatestQualifyingDonation } = require("../services/qualifyingDonation");
+const { getEligibleEmergencyDonorIds } = require("../services/emergencyDonorEligibility");
+const { getCompatibleRecipientBloodTypes } = require("../utils/bloodCompatibility");
 const {
   getDatabaseNow,
   lockActiveApprovalForBooking,
@@ -810,16 +812,37 @@ const listDonorEmergencyAlerts = async (req, res, next) => {
   try {
     const donor = await prisma.donor.findUnique({
       where: { userId: req.user.userId },
-      select: { donorId: true },
+      select: {
+        donorId: true,
+        bloodType: true,
+        isEligible: true,
+        user: { select: { status: true } },
+      },
     });
     if (!donor) {
       return res.status(404).json({ success: false, message: "Donor profile not found." });
     }
+    const now = new Date();
+    const eligibleDonorIds = donor.isEligible && donor.user.status === "ACTIVE"
+      ? await getEligibleEmergencyDonorIds(prisma, [donor.donorId], now)
+      : new Set();
+    if (!eligibleDonorIds.has(donor.donorId)) {
+      return res.status(200).json({ success: true, data: { alerts: [] } });
+    }
+    const today = new Date(now);
+    today.setUTCHours(0, 0, 0, 0);
 
     const matches = await prisma.requestMatch.findMany({
       where: {
         donorId: donor.donorId,
         status: { in: ["NOTIFIED", "ACCEPTED", "DECLINED"] },
+        request: {
+          is: {
+            status: { in: OPEN_REQUEST_STATUSES },
+            neededBy: { gte: today },
+            bloodType: { in: getCompatibleRecipientBloodTypes(donor.bloodType) },
+          },
+        },
       },
       include: {
         request: {
@@ -830,6 +853,9 @@ const listDonorEmergencyAlerts = async (req, res, next) => {
             urgencyLevel: true,
             status: true,
             neededBy: true,
+            latitude: true,
+            longitude: true,
+            notes: true,
             currentWave: true,
             hospital: { select: { name: true, location: true } },
           },
@@ -868,7 +894,12 @@ const respondToDonorAlert = async (req, res, next) => {
 
     const donor = await prisma.donor.findUnique({
       where: { userId: req.user.userId },
-      select: { donorId: true },
+      select: {
+        donorId: true,
+        bloodType: true,
+        isEligible: true,
+        user: { select: { status: true } },
+      },
     });
     if (!donor) {
       return res.status(404).json({ success: false, message: "Donor profile not found." });
@@ -877,6 +908,13 @@ const respondToDonorAlert = async (req, res, next) => {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const result = await prisma.$transaction(async (tx) => {
+      const eligibleDonorIds = donor.isEligible && donor.user.status === "ACTIVE"
+        ? await getEligibleEmergencyDonorIds(tx, [donor.donorId])
+        : new Set();
+      if (!eligibleDonorIds.has(donor.donorId)) {
+        return { count: 0, ineligible: true };
+      }
+
       const updatedMatch = await tx.requestMatch.updateMany({
         where: {
           requestId,
@@ -884,6 +922,7 @@ const respondToDonorAlert = async (req, res, next) => {
           status: "NOTIFIED",
           request: {
             is: {
+              bloodType: { in: getCompatibleRecipientBloodTypes(donor.bloodType) },
               status: { in: OPEN_REQUEST_STATUSES },
               neededBy: { gte: today },
             },
@@ -926,6 +965,12 @@ const respondToDonorAlert = async (req, res, next) => {
     });
 
     if (!result.count) {
+      if (result.ineligible) {
+        return res.status(409).json({
+          success: false,
+          message: "You are not currently eligible to respond to emergency blood requests.",
+        });
+      }
       const match = await prisma.requestMatch.findUnique({
         where: { requestId_donorId: { requestId, donorId: donor.donorId } },
         select: { matchId: true, status: true },
